@@ -3,7 +3,14 @@ import { useAppStore } from '../store/useAppStore';
 export function TokenGauge() {
     const { context, messages, settings } = useAppStore();
 
-    const systemText = [context.loreRaw, context.rulesRaw].filter(Boolean).join('\n\n');
+    const systemParts: string[] = [];
+    if (context.loreRaw) systemParts.push(context.loreRaw);
+    if (context.rulesRaw) systemParts.push(context.rulesRaw);
+    if (context.saveFormat1Active && context.saveFormat1) systemParts.push(context.saveFormat1);
+    if (context.saveFormat2Active && context.saveFormat2) systemParts.push(context.saveFormat2);
+    if (context.saveInstructionActive && context.saveInstruction) systemParts.push(context.saveInstruction);
+    if (context.saveStateMacroActive && context.saveStateMacro) systemParts.push(context.saveStateMacro);
+    const systemText = systemParts.join('\n\n');
     const systemTokens = Math.ceil(systemText.length / 4);
 
     const historyText = messages.map((m) => m.content).join('');

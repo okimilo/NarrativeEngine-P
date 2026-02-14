@@ -15,9 +15,19 @@ export function buildPayload(
     history: ChatMessage[],
     userMessage: string
 ): OpenAIMessage[] {
-    const systemContent = [context.loreRaw, context.rulesRaw]
-        .filter(Boolean)
-        .join('\n\n');
+    const systemParts: string[] = [];
+
+    // Core context (always included)
+    if (context.loreRaw) systemParts.push(context.loreRaw);
+    if (context.rulesRaw) systemParts.push(context.rulesRaw);
+
+    // Template fields (only when toggled on)
+    if (context.saveFormat1Active && context.saveFormat1) systemParts.push(context.saveFormat1);
+    if (context.saveFormat2Active && context.saveFormat2) systemParts.push(context.saveFormat2);
+    if (context.saveInstructionActive && context.saveInstruction) systemParts.push(context.saveInstruction);
+    if (context.saveStateMacroActive && context.saveStateMacro) systemParts.push(context.saveStateMacro);
+
+    const systemContent = systemParts.join('\n\n');
 
     const systemTokens = estimateTokens(systemContent);
     const userTokens = estimateTokens(userMessage);
