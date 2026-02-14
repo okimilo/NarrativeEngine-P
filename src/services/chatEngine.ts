@@ -26,6 +26,10 @@ export function buildPayload(
     if (context.saveFormat2Active && context.saveFormat2) systemParts.push(context.saveFormat2);
     if (context.saveInstructionActive && context.saveInstruction) systemParts.push(context.saveInstruction);
     if (context.saveStateMacroActive && context.saveStateMacro) systemParts.push(context.saveStateMacro);
+    if (context.canonStateActive && context.canonState) systemParts.push(context.canonState);
+    if (context.headerIndexActive && context.headerIndex) systemParts.push(context.headerIndex);
+    if (context.starterActive && context.starter) systemParts.push(context.starter);
+    if (context.continuePromptActive && context.continuePrompt) systemParts.push(context.continuePrompt);
 
     const systemContent = systemParts.join('\n\n');
 

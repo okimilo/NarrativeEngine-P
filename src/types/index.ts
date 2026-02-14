@@ -12,11 +12,19 @@ export type GameContext = {
     saveFormat2: string;
     saveInstruction: string;
     saveStateMacro: string;
-    // Toggles: whether each template field is appended to save state output
+    canonState: string;
+    headerIndex: string;
+    starter: string;
+    continuePrompt: string;
+    // Toggles: whether each field is appended to context
     saveFormat1Active: boolean;
     saveFormat2Active: boolean;
     saveInstructionActive: boolean;
     saveStateMacroActive: boolean;
+    canonStateActive: boolean;
+    headerIndexActive: boolean;
+    starterActive: boolean;
+    continuePromptActive: boolean;
 };
 
 export type ChatMessage = {

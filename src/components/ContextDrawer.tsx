@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BookOpen, ScrollText, FileText, FileCode, Terminal, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react';
+import { BookOpen, ScrollText, FileText, FileCode, Terminal, MessageSquare, ChevronDown, ChevronRight, Database, List } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
 
 const LORE_LIMIT = 15000;
@@ -118,7 +118,6 @@ export function ContextDrawer() {
             <div className="flex-1 overflow-y-auto">
                 {/* Context Section */}
                 <Section title="◆ System Context" color="text-terminal glow-green" defaultOpen={true}>
-                    {/* Lore */}
                     <div>
                         <label className="flex items-center gap-2 text-[11px] text-ember uppercase tracking-wider mb-2">
                             <BookOpen size={13} />
@@ -134,7 +133,6 @@ export function ContextDrawer() {
                         <TokenCounter text={context.loreRaw} limit={LORE_LIMIT} />
                     </div>
 
-                    {/* Rules */}
                     <div>
                         <label className="flex items-center gap-2 text-[11px] text-ice uppercase tracking-wider mb-2">
                             <ScrollText size={13} />
@@ -154,7 +152,7 @@ export function ContextDrawer() {
                 {/* Templates Section */}
                 <Section title="◇ Templates" color="text-text-dim" defaultOpen={false}>
                     <p className="text-[9px] text-text-dim/50 -mt-1 mb-2">
-                        Toggle ON = appended to Save State output (top→bottom order)
+                        Toggle ON = appended to context (top→bottom order)
                     </p>
 
                     <TemplateField
@@ -204,6 +202,61 @@ export function ContextDrawer() {
                         active={context.saveStateMacroActive}
                         onToggle={() => updateContext({ saveStateMacroActive: !context.saveStateMacroActive })}
                         hint="↑ Core prompt — the [Save State] button builds from all active fields above"
+                    />
+                </Section>
+
+                {/* Save File Section */}
+                <Section title="◇ Save File" color="text-ember" defaultOpen={false}>
+                    <p className="text-[9px] text-text-dim/50 -mt-1 mb-2">
+                        Toggle ON = appended to context (top→bottom order)
+                    </p>
+
+                    <TemplateField
+                        icon={<Database size={13} />}
+                        label="Canon State"
+                        color="text-ember"
+                        value={context.canonState}
+                        onChange={(v) => updateContext({ canonState: v })}
+                        placeholder="Paste canon state data..."
+                        rows={6}
+                        active={context.canonStateActive}
+                        onToggle={() => updateContext({ canonStateActive: !context.canonStateActive })}
+                    />
+
+                    <TemplateField
+                        icon={<List size={13} />}
+                        label="Header Index"
+                        color="text-ice"
+                        value={context.headerIndex}
+                        onChange={(v) => updateContext({ headerIndex: v })}
+                        placeholder="Paste header index..."
+                        rows={4}
+                        active={context.headerIndexActive}
+                        onToggle={() => updateContext({ headerIndexActive: !context.headerIndexActive })}
+                    />
+
+                    <TemplateField
+                        icon={<FileText size={13} />}
+                        label="Starter"
+                        color="text-terminal"
+                        value={context.starter}
+                        onChange={(v) => updateContext({ starter: v })}
+                        placeholder="Paste starter prompt..."
+                        rows={4}
+                        active={context.starterActive}
+                        onToggle={() => updateContext({ starterActive: !context.starterActive })}
+                    />
+
+                    <TemplateField
+                        icon={<FileText size={13} />}
+                        label="Continue"
+                        color="text-text-dim"
+                        value={context.continuePrompt}
+                        onChange={(v) => updateContext({ continuePrompt: v })}
+                        placeholder="Paste continue prompt..."
+                        rows={4}
+                        active={context.continuePromptActive}
+                        onToggle={() => updateContext({ continuePromptActive: !context.continuePromptActive })}
                     />
                 </Section>
             </div>
