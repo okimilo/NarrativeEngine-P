@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import { useAppStore } from '../store/useAppStore';
 import { buildPayload, sendMessage } from '../services/chatEngine';
 import { shouldCondense, condenseHistory } from '../services/condenser';
+import { runSaveFilePipeline } from '../services/saveFileEngine';
 
 function uid(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -19,6 +20,7 @@ export function ChatArea() {
         addMessage,
         updateLastAssistant,
         setStreaming,
+        updateContext,
         setCondensed,
         setCondensing,
     } = useAppStore();
@@ -35,10 +37,26 @@ export function ChatArea() {
         if (condenser.isCondensing) return;
         setCondensing(true);
         try {
+            // Step 1 & 2: Generate Canon State + Header Index BEFORE condensing
+            const currentCtx = useAppStore.getState().context;
+            const saveResult = await runSaveFilePipeline(settings, messages, currentCtx);
+
+            // Auto-populate fields
+            if (saveResult.canonSuccess) {
+                updateContext({ canonState: saveResult.canonState });
+            }
+            if (saveResult.indexSuccess) {
+                updateContext({ headerIndex: saveResult.headerIndex });
+            }
+
+            console.log(`[SavePipeline] Canon: ${saveResult.canonSuccess ? '✓' : '✗'}, Index: ${saveResult.indexSuccess ? '✓' : '✗'}`);
+
+            // Step 3: Condense history (using fresh context with updated glossary)
+            const freshCtx = useAppStore.getState().context;
             const result = await condenseHistory(
                 settings,
                 messages,
-                context,
+                freshCtx,
                 condenser.condensedUpToIndex,
                 condenser.condensedSummary
             );
