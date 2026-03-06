@@ -145,7 +145,7 @@ function buildCanonStatePrompt(recentMessages: ChatMessage[], existingCanonState
 }
 
 export async function generateCanonState(
-    provider: ProviderConfig,
+    provider: ProviderConfig | EndpointConfig,
     recentMessages: ChatMessage[],
     existingCanonState: string,
     maxRetries = 1
@@ -285,7 +285,7 @@ export function mergeHeaderIndex(existing: string, llmOutput: string): string {
 }
 
 export async function generateHeaderIndex(
-    provider: ProviderConfig,
+    provider: ProviderConfig | EndpointConfig,
     recentMessages: ChatMessage[],
     existingHeaderIndex: string,
     maxRetries = 1
@@ -312,7 +312,7 @@ export async function generateHeaderIndex(
 // ─── Full Pipeline ───
 
 export async function runSaveFilePipeline(
-    provider: ProviderConfig,
+    provider: ProviderConfig | EndpointConfig,
     recentMessages: ChatMessage[],
     context: GameContext
 ): Promise<{ canonState: string; headerIndex: string; canonSuccess: boolean; indexSuccess: boolean }> {

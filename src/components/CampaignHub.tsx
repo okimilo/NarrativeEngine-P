@@ -109,23 +109,23 @@ export function CampaignHub() {
                 lastPlayedAt: Date.now(),
             };
 
-        // Update cover if changed
         if (coverFile) {
             campaign.coverImage = coverPreview;
         } else if (isEdit) {
-            campaign.coverImage = coverPreview; // Keep existing or cleared
+            campaign.coverImage = coverPreview;
         }
 
         await saveCampaign(campaign);
 
-        // Process lore file if uploaded
         if (loreFile) {
             const loreText = await loreFile.text();
             const chunks = chunkLoreFile(loreText);
             await saveLoreChunks(campaign.id, chunks);
         }
 
-        // Process rules file if uploaded (update campaign state)
+        // Only write campaign state when a new rules file is actually provided.
+        // Never fall back to DEFAULT_CONTEXT — that would silently erase real data
+        // if the modal opens before IndexedDB has finished loading.
         if (rulesFile) {
             const rulesRaw = await rulesFile.text();
             const existingState = await loadCampaignState(campaign.id);
@@ -194,7 +194,7 @@ export function CampaignHub() {
 
             {/* Title */}
             <h1 className="text-terminal text-lg sm:text-2xl font-bold tracking-[0.2em] sm:tracking-[0.4em] uppercase glow-green mb-2">
-                AI GM COCKPIT
+                Narrative Nexus
             </h1>
             <p className="text-text-dim text-xs tracking-widest uppercase mb-6 sm:mb-10">
                 SELECT CAMPAIGN

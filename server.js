@@ -31,6 +31,21 @@ function writeJson(filePath, data) {
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
 }
 
+/** Strip all apiKey values before writing to disk. Keys live in the browser's IndexedDB only. */
+function stripApiKeys(body) {
+    if (!body || typeof body !== 'object') return body;
+    const stripped = JSON.parse(JSON.stringify(body)); // deep clone
+    const settings = stripped.settings;
+    if (settings && Array.isArray(settings.presets)) {
+        for (const preset of settings.presets) {
+            for (const section of ['storyAI', 'imageAI', 'summarizerAI']) {
+                if (preset[section]) preset[section].apiKey = '';
+            }
+        }
+    }
+    return stripped;
+}
+
 // ─── Middleware ───
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -45,7 +60,8 @@ app.get('/api/settings', (_req, res) => {
 });
 
 app.put('/api/settings', (req, res) => {
-    writeJson(SETTINGS_FILE, req.body);
+    const sanitized = stripApiKeys(req.body);
+    writeJson(SETTINGS_FILE, sanitized);
     res.json({ ok: true });
 });
 
@@ -231,6 +247,36 @@ app.get('/api/campaigns/:id/archive/open', (req, res) => {
             res.json({ ok: true });
         });
     });
+});
+
+// ═══════════════════════════════════════════
+//  Assets (NPC Portraits)
+// ═══════════════════════════════════════════
+
+const PUBLIC_ASSETS_DIR = path.join(__dirname, 'public', 'assets', 'portraits');
+if (!fs.existsSync(PUBLIC_ASSETS_DIR)) fs.mkdirSync(PUBLIC_ASSETS_DIR, { recursive: true });
+
+app.post('/api/assets/download', async (req, res) => {
+    const { url, filename } = req.body;
+    if (!url || !filename) return res.status(400).json({ error: 'Missing url or filename' });
+
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Fetch failed: ${response.statusText}`);
+
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+
+        const filePath = path.join(PUBLIC_ASSETS_DIR, filename);
+        fs.writeFileSync(filePath, buffer);
+
+        // Return the relative path for the frontend (Vite serves /public at root)
+        const relativePath = `/assets/portraits/${filename}`;
+        res.json({ ok: true, path: relativePath });
+    } catch (err) {
+        console.error('[Asset Download] Error:', err);
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ═══════════════════════════════════════════

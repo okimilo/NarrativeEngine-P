@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import type { AppSettings, GameContext, ChatMessage, CondenserState, LoreChunk, ProviderConfig, AIPreset, EndpointConfig, NPCEntry, ArchiveChunk } from '../types';
+import { get as idbGet, set as idbSet } from 'idb-keyval';
+import { encryptSettingsPresets, decryptSettingsPresets } from '../services/settingsCrypto';
 
 const API = '/api';
 
@@ -84,6 +86,7 @@ type AppState = {
     npcLedger: NPCEntry[];
     setNPCLedger: (npcs: NPCEntry[]) => void;
     addNPC: (npc: NPCEntry) => void;
+    addNPCs: (newNpcs: NPCEntry[]) => void;
     updateNPC: (id: string, patch: Partial<NPCEntry>) => void;
     removeNPC: (id: string) => void;
 
@@ -122,7 +125,15 @@ type AppState = {
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 function debouncedSaveSettings(settings: AppSettings, activeCampaignId: string | null) {
     if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
+    saveTimer = setTimeout(async () => {
+        // Encrypt before writing — idb is primary, server file is plaintext-stripped
+        const encryptedPresets = await encryptSettingsPresets(settings.presets);
+        const encryptedSettings = { ...settings, presets: encryptedPresets };
+
+        // Primary: IndexedDB (always write here)
+        idbSet('nn_settings', { settings: encryptedSettings, activeCampaignId }).catch(console.error);
+
+        // Secondary: server file (apiKeys already stripped server-side)
         fetch(`${API}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -338,23 +349,39 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
     loadSettings: async () => {
         try {
+            // Primary: try IndexedDB first
+            const localSettings = await idbGet('nn_settings');
+            if (localSettings && localSettings.settings) {
+                const migrated = migrateSettings(localSettings);
+                // Decrypt apiKeys that were stored encrypted
+                const decryptedPresets = await decryptSettingsPresets(migrated.presets);
+                const decrypted = { ...migrated, presets: decryptedPresets };
+                set({
+                    settings: decrypted,
+                    activeCampaignId: null,
+                    settingsLoaded: true,
+                });
+                applyTheme(decrypted.theme ?? 'light');
+                return;
+            }
+
+            // Fallback: server file (no apiKeys, user will need to re-enter them)
             const res = await fetch(`${API}/settings`);
             if (res.ok) {
                 const data = await res.json();
                 const migrated = migrateSettings(data);
                 set({
                     settings: migrated,
-                    activeCampaignId: data.activeCampaignId ?? null,
+                    activeCampaignId: null,
                     settingsLoaded: true,
                 });
-                // Apply persisted theme
                 applyTheme(migrated.theme ?? 'light');
-                // Persist migrated format
-                debouncedSaveSettings(migrated, data.activeCampaignId ?? null);
+                // Persist to idb immediately so next load is from idb
+                debouncedSaveSettings(migrated, null);
                 return;
             }
         } catch (e) {
-            console.warn('Failed to load settings from API, using defaults', e);
+            console.warn('Failed to load settings, using defaults', e);
         }
         set({ settingsLoaded: true });
     },
@@ -454,9 +481,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
     archiveChunks: [],
     setArchiveChunks: (chunks) => set({ archiveChunks: chunks }),
     npcLedger: [],
-    setNPCLedger: (npcs) => set({ npcLedger: npcs }),
+    setNPCLedger: (npcs) => set((s) => {
+        debouncedSaveNPCLedger(s.activeCampaignId, npcs);
+        return { npcLedger: npcs };
+    }),
     addNPC: (npc) => set((s) => {
         const withNew = [...s.npcLedger, npc];
+        const deduped = dedupeNPCLedger(withNew);
+        debouncedSaveNPCLedger(s.activeCampaignId, deduped);
+        return { npcLedger: deduped };
+    }),
+    addNPCs: (newNpcs) => set((s) => {
+        const withNew = [...s.npcLedger, ...newNpcs];
         const deduped = dedupeNPCLedger(withNew);
         debouncedSaveNPCLedger(s.activeCampaignId, deduped);
         return { npcLedger: deduped };
@@ -538,7 +574,11 @@ export const useAppStore = create<AppState>()((set, get) => ({
             return { messages: msgs };
         }),
     setStreaming: (v) => set({ isStreaming: v }),
-    clearChat: () => set({ messages: [] }),
+    clearChat: () => set((s) => {
+        const newCondenser = { condensedSummary: '', condensedUpToIndex: -1, isCondensing: false };
+        debouncedSaveCampaignState(s.activeCampaignId, { context: s.context, messages: [], condenser: newCondenser });
+        return { messages: [], condenser: newCondenser };
+    }),
 
     // UI defaults
     settingsOpen: false,

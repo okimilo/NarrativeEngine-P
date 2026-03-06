@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Save, Loader2, Zap, Scroll, Edit2, RotateCcw, Trash2, Check, X } from 'lucide-react';
+import { Send, Save, Loader2, Zap, Scroll, Edit2, RotateCcw, Trash2, Check, X, Square } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useAppStore, DEFAULT_SURPRISE_TYPES, DEFAULT_SURPRISE_TONES, DEFAULT_WORLD_WHAT, DEFAULT_WORLD_WHERE, DEFAULT_WORLD_WHO, DEFAULT_WORLD_WHY } from '../store/useAppStore';
 import { buildPayload, sendMessage, generateNPCProfile, updateExistingNPCs } from '../services/chatEngine';
-import type { NPCEntry, ChatMessage } from '../types';
+import type { NPCEntry, ChatMessage, EndpointConfig, ProviderConfig } from '../types';
 import { shouldCondense, condenseHistory } from '../services/condenser';
 import { runSaveFilePipeline } from '../services/saveFileEngine';
 import { retrieveRelevantLore, searchLoreByQuery } from '../services/loreRetriever';
 import { retrieveArchiveMemory } from '../services/archiveMemory';
+import { set } from 'idb-keyval';
 
 function uid(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -39,6 +40,7 @@ export function ChatArea() {
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const abortControllerRef = useRef<AbortController | null>(null);
 
     // Auto-scroll only when a NEW message appears, not on every streaming token update.
     useEffect(() => {
@@ -64,7 +66,7 @@ export function ChatArea() {
             if (!provider) return;
             // Step 1 & 2: Generate Canon State + Header Index BEFORE condensing
             const currentCtx = useAppStore.getState().context;
-            const saveResult = await runSaveFilePipeline(provider, messages, currentCtx);
+            const saveResult = await runSaveFilePipeline(provider as EndpointConfig | ProviderConfig, messages, currentCtx);
 
             // Auto-populate fields
             if (saveResult.canonSuccess) {
@@ -97,11 +99,29 @@ export function ChatArea() {
         }
     };
 
+    const handleStop = () => {
+        if (abortControllerRef.current) {
+            abortControllerRef.current.abort();
+            abortControllerRef.current = null;
+        }
+        setStreaming(false);
+        setIsCheckingNotes(false);
+    };
+
+    const resetTextareaHeight = () => {
+        if (inputRef.current) {
+            inputRef.current.style.height = '40px';
+        }
+    };
+
     const handleSend = async (overrideText?: string) => {
         const textToUse = overrideText || input.trim();
         if (!textToUse || isStreaming) return;
 
-        if (!overrideText) setInput('');
+        if (!overrideText) {
+            setInput('');
+            resetTextareaHeight();
+        }
 
         const provider = useAppStore.getState().getActiveStoryEndpoint();
         if (!provider) return;
@@ -240,6 +260,8 @@ export function ChatArea() {
                     }
                 }
             }] : undefined;
+
+            abortControllerRef.current = new AbortController();
 
             await sendMessage(
                 provider,
@@ -408,11 +430,21 @@ export function ChatArea() {
                         setIsCheckingNotes(false);
                     }
                 },
-                tools
+                tools,
+                abortControllerRef.current || undefined
             );
         };
 
         await executeTurn(payload);
+    };
+
+    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setInput(e.target.value);
+        if (inputRef.current) {
+            inputRef.current.style.height = '40px';
+            const newHeight = Math.min(inputRef.current.scrollHeight, 240);
+            inputRef.current.style.height = `${newHeight}px`;
+        }
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -433,11 +465,11 @@ export function ChatArea() {
         const state = useAppStore.getState();
         if (state.activeCampaignId) {
             try {
-                localStorage.setItem(`nn_settings`, JSON.stringify({ settings: state.settings, activeCampaignId: state.activeCampaignId }));
-                localStorage.setItem(`nn_campaign_${state.activeCampaignId}_state`, JSON.stringify({ context: state.context, messages: state.messages, condenser: state.condenser }));
-                localStorage.setItem(`nn_campaign_${state.activeCampaignId}_npcs`, JSON.stringify(state.npcLedger));
+                set(`nn_settings`, { settings: state.settings, activeCampaignId: state.activeCampaignId });
+                set(`nn_campaign_${state.activeCampaignId}_state`, { context: state.context, messages: state.messages, condenser: state.condenser });
+                set(`nn_campaign_${state.activeCampaignId}_npcs`, state.npcLedger);
             } catch (e) {
-                console.error("[Save] Failed to force save to localStorage:", e);
+                console.error("[Save] Failed to force save to IndexedDB:", e);
             }
         }
         setTimeout(() => setIsSaving(false), 2000);
@@ -487,6 +519,7 @@ export function ChatArea() {
             useAppStore.getState().deleteMessagesFrom(msg.id);
             const textToResend = input.trim();
             setInput('');
+            resetTextareaHeight();
             setEditingMessageId(null);
             setTimeout(() => {
                 handleSend(textToResend);
@@ -494,6 +527,7 @@ export function ChatArea() {
         } else {
             useAppStore.getState().updateMessageContent(msg.id, input.trim());
             setInput('');
+            resetTextareaHeight();
             setEditingMessageId(null);
         }
     };
@@ -546,74 +580,93 @@ export function ChatArea() {
                     </div>
                 )}
 
-                {messages.slice(-visibleCount).filter(msg => msg.role !== 'tool').map((msg) => (
-                    <div
-                        key={msg.id}
-                        className={`group flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                    >
+                {messages.slice(-visibleCount).filter(msg => msg.role !== 'tool').map((msg) => {
+                    const markdownContent: string = typeof msg.displayContent === 'string'
+                        ? msg.displayContent
+                        : (typeof msg.content === 'string' ? msg.content : '');
+                    const parsedArgs = (msg as any).parsedArgs;
+                    const hasSummary = msg.role === 'tool' && parsedArgs && Array.isArray(parsedArgs.summary);
+                    const hasDebug = settings.debugMode === true && !!msg.debugPayload;
+
+                    return (
                         <div
-                            className={`max-w-[95%] md:max-w-[75%] px-3 md:px-4 py-2 md:py-3 text-sm font-mono leading-relaxed relative ${msg.role === 'user'
-                                ? 'bg-terminal/8 border-l-2 border-terminal text-text-primary'
-                                : msg.role === 'system'
-                                    ? 'bg-ember/8 border-l-2 border-ember text-ember/80'
-                                    : 'bg-void-lighter border-l-2 border-border text-text-primary'
-                                }`}
+                            key={msg.id}
+                            className={`group flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                         >
-                            {/* Action Bar (opacity-0 group-hover:opacity-100) */}
-                            <div className={`absolute -top-3 ${msg.role === 'user' ? 'left-2' : 'right-2'} flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity bg-void-darker border border-border p-[2px] rounded z-10`}>
-                                {msg.role !== 'system' && (
-                                    <button title="Edit" onClick={() => startEditing(msg)} className="text-text-dim hover:text-terminal p-1 bg-void-lighter rounded">
-                                        <Edit2 size={10} />
+                            <div
+                                className={`max-w-[95%] md:max-w-[75%] px-3 md:px-4 py-2 md:py-3 text-sm font-mono leading-relaxed relative ${msg.role === 'user'
+                                    ? 'bg-terminal/8 border-l-2 border-terminal text-text-primary'
+                                    : msg.role === 'system'
+                                        ? 'bg-ember/8 border-l-2 border-ember text-ember/80'
+                                        : 'bg-void-lighter border-l-2 border-border text-text-primary'
+                                    }`}
+                            >
+                                {/* Action Bar */}
+                                <div className={`absolute -top-3 ${msg.role === 'user' ? 'left-2' : 'right-2'} flex gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity bg-void-darker border border-border p-[2px] rounded z-10`}>
+                                    {msg.role !== 'system' && (
+                                        <button title="Edit" onClick={() => startEditing(msg)} className="text-text-dim hover:text-terminal p-1 bg-void-lighter rounded">
+                                            <Edit2 size={10} />
+                                        </button>
+                                    )}
+                                    {msg.role === 'assistant' && (
+                                        <button title="Regenerate" onClick={() => handleRegenerate(msg.id)} className="text-text-dim hover:text-terminal p-1 bg-void-lighter rounded">
+                                            <RotateCcw size={10} />
+                                        </button>
+                                    )}
+                                    <button title="Delete" onClick={() => deleteMessage(msg.id)} className="text-text-dim hover:text-red-400 p-1 bg-void-lighter rounded">
+                                        <Trash2 size={10} />
                                     </button>
-                                )}
-                                {msg.role === 'assistant' && (
-                                    <button title="Regenerate" onClick={() => handleRegenerate(msg.id)} className="text-text-dim hover:text-terminal p-1 bg-void-lighter rounded">
-                                        <RotateCcw size={10} />
-                                    </button>
-                                )}
-                                <button title="Delete" onClick={() => deleteMessage(msg.id)} className="text-text-dim hover:text-red-400 p-1 bg-void-lighter rounded">
-                                    <Trash2 size={10} />
-                                </button>
-                            </div>
+                                </div>
 
-                            <div className="flex items-center gap-2 mb-1">
-                                <span
-                                    className={`text-[10px] uppercase tracking-widest ${msg.role === 'user'
-                                        ? 'text-terminal'
-                                        : msg.role === 'system'
-                                            ? 'text-ember'
-                                            : 'text-ice'
-                                        }`}
-                                >
-                                    {msg.role === 'user' ? '► YOU' : msg.role === 'tool' ? '◈ TOOL' : msg.role === 'system' ? '◆ SYS' : '◇ GM'}
-                                </span>
-                                {msg.role === 'tool' && msg.name && (
-                                    <span className="text-[9px] text-terminal font-bold tracking-wider opacity-80">
-                                        [{msg.name}]
+                                <div className="flex items-center gap-2 mb-1">
+                                    <span
+                                        className={`text-[10px] uppercase tracking-widest ${msg.role === 'user'
+                                            ? 'text-terminal'
+                                            : msg.role === 'system'
+                                                ? 'text-ember'
+                                                : 'text-ice'
+                                            }`}
+                                    >
+                                        {msg.role === 'user' ? '► YOU' : msg.role === 'tool' ? '◈ TOOL' : msg.role === 'system' ? '◆ SYS' : '◇ GM'}
                                     </span>
+                                    {msg.role === 'tool' && msg.name && (
+                                        <span className="text-[9px] text-terminal font-bold tracking-wider opacity-80">
+                                            [{msg.name}]
+                                        </span>
+                                    )}
+                                    <span className="text-[9px] text-text-dim">
+                                        {new Date(msg.timestamp).toLocaleTimeString()}
+                                    </span>
+                                </div>
+
+                                <div className="gm-prose">
+                                    <ReactMarkdown>{markdownContent}</ReactMarkdown>
+                                    {hasSummary && (
+                                        <div className="mt-2 pl-3 border-l-2 border-terminal/30 text-[10px] text-text-dim">
+                                            <div className="uppercase tracking-widest text-terminal/60 mb-1">Generated Output:</div>
+                                            <ul className="list-disc leading-tight space-y-1">
+                                                {(parsedArgs.summary as any[]).map((s: any, i: number) => (
+                                                    <li key={i}>{typeof s === 'string' ? s : String(s)}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {hasDebug && (
+                                    <details className="mt-2 border-t border-border/50 pt-2 text-[10px]">
+                                        <summary className="cursor-pointer text-terminal/60 hover:text-terminal transition-colors select-none">
+                                            [View Raw Payload]
+                                        </summary>
+                                        <pre className="mt-2 bg-void p-2 overflow-x-auto text-text-dim text-[9px] font-mono leading-tight whitespace-pre-wrap break-all">
+                                            {JSON.stringify(msg.debugPayload, null, 2)}
+                                        </pre>
+                                    </details>
                                 )}
-                                <span className="text-[9px] text-text-dim">
-                                    {new Date(msg.timestamp).toLocaleTimeString()}
-                                </span>
                             </div>
-
-                            <div className="gm-prose">
-                                <ReactMarkdown>{`${msg.displayContent || msg.content || ''}`}</ReactMarkdown>
-                            </div>
-
-                            {settings.debugMode && msg.debugPayload && (
-                                <details className="mt-2 border-t border-border/50 pt-2 text-[10px]">
-                                    <summary className="cursor-pointer text-terminal/60 hover:text-terminal transition-colors select-none">
-                                        [View Raw Payload]
-                                    </summary>
-                                    <pre className="mt-2 bg-void p-2 overflow-x-auto text-text-dim text-[9px] font-mono leading-tight whitespace-pre-wrap break-all">
-                                        {JSON.stringify(msg.debugPayload, null, 2)}
-                                    </pre>
-                                </details>
-                            )}
                         </div>
-                    </div>
-                ))}
+                    );
+                })}
 
                 {isCheckingNotes ? (
                     <div className="flex items-center gap-2 text-terminal/80 text-xs px-4">
@@ -657,11 +710,13 @@ export function ChatArea() {
                     <Scroll size={13} />
                     Archive
                 </button>
-                {condenser.condensedSummary && (
-                    <span className="text-[9px] text-terminal/60 self-center ml-1">
-                        ● condensed
-                    </span>
-                )}
+                {
+                    condenser.condensedSummary && (
+                        <span className="text-[9px] text-terminal/60 self-center ml-1">
+                            ● condensed
+                        </span>
+                    )
+                }
             </div>
 
             {/* Input Area */}
@@ -680,21 +735,34 @@ export function ChatArea() {
                     </div>
                 )}
                 <div className="px-2 sm:px-4 pb-3 sm:pb-4 pt-3 sm:pt-4">
-                    <div className="flex gap-0 border border-border bg-void focus-within:border-terminal transition-colors">
+                    <div className="flex gap-1 border border-border bg-void focus-within:border-terminal transition-colors items-end p-1 rounded-sm">
+                        <div className="relative shrink-0 mb-[4px] ml-1">
+                            <select
+                                value={settings.activePresetId}
+                                onChange={(e) => useAppStore.getState().setActivePreset(e.target.value)}
+                                className="h-[32px] bg-surface border border-border text-text-dim hover:text-terminal hover:border-terminal/50 pl-3 pr-7 text-[10px] uppercase tracking-widest focus:outline-none focus:border-terminal max-w-[120px] sm:max-w-[150px] truncate cursor-pointer appearance-none rounded transition-colors font-bold"
+                                title="Active AI Preset"
+                            >
+                                {settings.presets.map(p => (
+                                    <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                            </select>
+                            <svg className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-text-dim pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </div>
                         <textarea
                             ref={inputRef}
                             value={input}
-                            onChange={(e) => setInput(e.target.value)}
+                            onChange={handleInputChange}
                             onKeyDown={handleKeyDown}
                             placeholder={editingMessageId ? "Edit message..." : "What do you do?"}
-                            className="flex-1 bg-transparent px-3 py-2.5 text-sm text-text-primary placeholder:text-text-dim/40 font-mono resize-none border-none outline-none min-h-[44px]"
+                            className="flex-1 bg-transparent px-2 py-2.5 text-sm text-text-primary placeholder:text-text-dim/40 font-mono resize-none border-none outline-none min-h-[40px] leading-5"
                         />
                         <button
-                            onClick={editingMessageId ? handleEditSubmit : () => handleSend()}
-                            disabled={isStreaming || !input.trim()}
-                            className="px-4 text-terminal hover:bg-terminal/10 transition-all disabled:opacity-30 disabled:cursor-not-allowed border-l border-border flex items-center justify-center gap-2"
+                            onClick={isStreaming ? handleStop : (editingMessageId ? handleEditSubmit : () => handleSend())}
+                            disabled={!isStreaming && !input.trim()}
+                            className={`h-[32px] w-[44px] mb-[4px] rounded transition-all disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center shrink-0 ${isStreaming ? 'text-amber-500 hover:bg-amber-500/10' : 'text-terminal hover:bg-terminal/10'}`}
                         >
-                            {editingMessageId ? <Check size={16} /> : <Send size={16} />}
+                            {isStreaming ? <Square size={16} fill="currentColor" /> : (editingMessageId ? <Check size={16} /> : <Send size={16} />)}
                         </button>
                     </div>
                 </div>

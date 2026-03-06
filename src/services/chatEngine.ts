@@ -171,7 +171,8 @@ export async function sendMessage(
     onChunk: (text: string) => void,
     onDone: (toolCall?: { id: string, name: string, arguments: string }) => void,
     onError: (err: string) => void,
-    tools?: unknown[]
+    tools?: unknown[],
+    abortController?: AbortController
 ) {
     const url = `${provider.endpoint.replace(/\/+$/, '')}/chat/completions`;
 
@@ -190,7 +191,7 @@ export async function sendMessage(
             payload.tools = tools;
         }
 
-        const controller = new AbortController();
+        const controller = abortController || new AbortController();
         let timeoutId = setTimeout(() => controller.abort(), 120000); // 120 seconds timeout
 
         const res = await fetch(url, {
@@ -408,7 +409,7 @@ Note: the 6 axes (nature...ego) MUST be integers from 1 to 10.`;
                     storyRelevance: parsed.storyRelevance || 'Unknown',
                     appearance: '', // legacy
                     visualProfile: parsed.visualProfile || {
-                        race: 'Unknown', gender: 'Unknown', ageRange: 'Unknown', build: 'Unknown', symmetry: 'Unknown', hairStyle: 'Unknown', eyeColor: 'Unknown', skinTone: 'Unknown', gait: 'Unknown', distinctMarks: 'None', clothing: 'Unknown'
+                        race: 'Unknown', gender: 'Unknown', ageRange: 'Unknown', build: 'Unknown', symmetry: 'Unknown', hairStyle: 'Unknown', eyeColor: 'Unknown', skinTone: 'Unknown', gait: 'Unknown', distinctMarks: 'None', clothing: 'Unknown', artStyle: 'Realistic'
                     },
                     disposition: parsed.disposition || 'Neutral',
                     goals: parsed.goals || 'Unknown',
@@ -520,7 +521,12 @@ export async function updateExistingNPCs(
     const recentContext = history.slice(-5).map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
 
     const npcDatas = npcsToCheck.map(npc => {
-        return `[NPC: ${npc.name}]\n` +
+        const vp = npc.visualProfile || { race: '', gender: '', ageRange: '', build: '', symmetry: '', hairStyle: '', eyeColor: '', skinTone: '', gait: '', distinctMarks: '', clothing: '' };
+        const missingFields = Object.entries(vp)
+            .filter(([key, val]) => key !== 'artStyle' && (!val || val === 'Unknown' || val === 'None'))
+            .map(([key]) => key);
+
+        let data = `[NPC: ${npc.name}]\n` +
             `Status: ${npc.status || 'Alive'}\n` +
             `Appearance: ${npc.appearance || 'Unknown'}\n` +
             `Disposition: ${npc.disposition || 'Unknown'}\n` +
@@ -528,7 +534,12 @@ export async function updateExistingNPCs(
             `Affinity: ${npc.affinity ?? 50}/100\n` +
             `Axes: Nature=${npc.nature}/10, Training=${npc.training}/10, Emotion=${npc.emotion}/10, Social=${npc.social}/10, Belief=${npc.belief}/10, Ego=${npc.ego}/10\n` +
             `Faction: ${npc.faction || 'Unknown'}\n` +
-            `Story Relevance: ${npc.storyRelevance || 'Unknown'}\n`
+            `Story Relevance: ${npc.storyRelevance || 'Unknown'}\n`;
+
+        if (missingFields.length > 0) {
+            data += `NOTE: This NPC has missing or generic "visualProfile" fields: ${missingFields.join(', ')}. You MUST attempt to determine specific values for these based on their "Appearance" and recent context.\n`;
+        }
+        return data;
     }).join('\n\n');
 
     const prompt = `You are a background game state analyzer. Your job is to read the RECENT CONTEXT of an RPG session and determine if any of the provided NPCs have undergone a shift in their status, psychological axes, goals, disposition, faction, or relevance.
@@ -583,9 +594,20 @@ RESPOND ONLY WITH VALID JSON.`;
                     );
 
                     if (targetNpc) {
+                        // If AI provided visualProfile, ensure we get all fields, keeping defaults for missing ones
+                        const changes = { ...update.changes };
+                        if (changes.visualProfile && typeof changes.visualProfile === 'object') {
+                            changes.visualProfile = {
+                                ...targetNpc.visualProfile, // fallback to existing (even if unknown)
+                                ...changes.visualProfile,
+                                // Enforce artStyle persistence if they had one or set default
+                                artStyle: targetNpc.visualProfile?.artStyle || 'Realistic'
+                            };
+                        }
+
                         // Apply updates
-                        updateNPCStore(targetNpc.id, update.changes);
-                        console.log(`[NPC Updater] Applied changes to ${targetNpc.name}:`, update.changes);
+                        updateNPCStore(targetNpc.id, changes);
+                        console.log(`[NPC Updater] Applied changes to ${targetNpc.name}:`, changes);
                     }
                 }
             } else {
@@ -597,3 +619,60 @@ RESPOND ONLY WITH VALID JSON.`;
     }
 }
 
+// ============================================================================
+// Image Generation API
+// ============================================================================
+
+export async function generateNPCPortrait(config: EndpointConfig, prompt: string): Promise<string> {
+    if (!config.endpoint) {
+        throw new Error('Image AI not configured');
+    }
+
+    const payload = {
+        model: config.modelName || 'nano-banana',
+        prompt,
+        negative_prompt: "multiple people, group, crowd, split screen, twins, double, text, watermark, signature",
+        size: '896x1152',
+        response_format: 'url',
+    };
+
+    const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+    };
+    if (config.apiKey) {
+        headers['Authorization'] = `Bearer ${config.apiKey}`;
+    }
+
+    // Normalize: strip trailing slashes and any pre-existing /images/generations suffix,
+    // then always append the correct path. Works for both base endpoints and full paths.
+    const baseEndpoint = config.endpoint
+        .replace(/\/+$/, '')                   // strip trailing slashes
+        .replace(/\/images\/generations$/, ''); // strip suffix if already present
+    const url = `${baseEndpoint}/images/generations`;
+
+    try {
+        console.log('[Image Engine] Sending payload:', payload);
+        const res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+            const err = await res.text();
+            throw new Error(`Failed to generate image: ${err}`);
+        }
+
+        const data = await res.json();
+
+        // Match nano-gpt return format
+        if (data.data && data.data[0] && data.data[0].url) {
+            return data.data[0].url;
+        }
+
+        throw new Error('Unexpected output format from Image AI: ' + JSON.stringify(data));
+    } catch (error) {
+        console.error('[Image Engine] Error generating portrait:', error);
+        throw error;
+    }
+}

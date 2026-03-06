@@ -4,6 +4,7 @@ import { useAppStore, DEFAULT_SURPRISE_TYPES, DEFAULT_SURPRISE_TONES, DEFAULT_WO
 import { scanInventory } from '../services/inventoryParser';
 import { scanCharacterProfile } from '../services/characterProfileParser';
 import { populateEngineTags } from '../services/chatEngine';
+import type { EndpointConfig, ProviderConfig } from '../types';
 
 const RULES_LIMIT = 5000;
 
@@ -119,7 +120,7 @@ export function ContextDrawer() {
         try {
             const provider = getActiveStoryEndpoint();
             if (!provider) return;
-            const newInventory = await scanInventory(provider, messages, context.inventory);
+            const newInventory = await scanInventory(provider as ProviderConfig | EndpointConfig, messages, context.inventory);
             updateContext({ inventory: newInventory });
         } catch (e) {
             console.error('Failed to scan inventory:', e);
@@ -135,7 +136,7 @@ export function ContextDrawer() {
         try {
             const provider = getActiveStoryEndpoint();
             if (!provider) return;
-            const newProfile = await scanCharacterProfile(provider, messages, context.characterProfile);
+            const newProfile = await scanCharacterProfile(provider as ProviderConfig | EndpointConfig, messages, context.characterProfile);
             updateContext({ characterProfile: newProfile });
         } catch (e) {
             console.error('Failed to scan character profile:', e);

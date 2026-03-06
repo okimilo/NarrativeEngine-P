@@ -154,6 +154,7 @@ export type NPCVisualProfile = {
     gait: string;
     distinctMarks: string;
     clothing: string;
+    artStyle: string;
 };
 
 export type NPCEntry = {
