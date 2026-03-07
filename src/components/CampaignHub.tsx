@@ -4,7 +4,7 @@ import { useAppStore } from '../store/useAppStore';
 import {
     listCampaigns, deleteCampaign, loadCampaignState,
     saveCampaign, saveCampaignState, saveLoreChunks, getLoreChunks,
-    getNPCLedger, loadArchiveChunks
+    getNPCLedger, loadArchiveIndex
 } from '../store/campaignStore';
 import { chunkLoreFile } from '../services/loreChunker';
 import type { Campaign } from '../types';
@@ -151,7 +151,7 @@ export function CampaignHub() {
         const state = await loadCampaignState(campaign.id);
         const chunks = await getLoreChunks(campaign.id);
         const npcs = await getNPCLedger(campaign.id);
-        const archiveChunks = await loadArchiveChunks(campaign.id);
+        const archiveIndex = await loadArchiveIndex(campaign.id);
 
         // Batch-set all state at once to avoid partial renders
         useAppStore.setState({
@@ -160,7 +160,7 @@ export function CampaignHub() {
             condenser: state?.condenser ?? DEFAULT_CONDENSER,
             loreChunks: chunks,
             npcLedger: npcs,
-            archiveChunks,
+            archiveIndex,
             activeCampaignId: campaign.id,
         });
     };

@@ -25,7 +25,7 @@ function getAxisLabel(axis: string, value: number) {
 
 const DEFAULT_VISUAL_PROFILE: NPCVisualProfile = {
     race: '', gender: '', ageRange: '', build: '', symmetry: '',
-    hairStyle: '', eyeColor: '', skinTone: '', gait: '', distinctMarks: '', clothing: '', artStyle: 'Realistic'
+    hairStyle: '', eyeColor: '', skinTone: '', gait: '', distinctMarks: '', clothing: '', artStyle: 'Anime'
 };
 
 function uid(): string {
@@ -243,7 +243,7 @@ export function NPCLedgerModal() {
                 gait: currentVP.gait || incomingVP?.gait || '',
                 distinctMarks: currentVP.distinctMarks || incomingVP?.distinctMarks || '',
                 clothing: currentVP.clothing || incomingVP?.clothing || '',
-                artStyle: currentVP.artStyle || incomingVP?.artStyle || 'Realistic',
+                artStyle: currentVP.artStyle || incomingVP?.artStyle || 'Anime',
             };
 
             const vpChanged = (
@@ -258,7 +258,7 @@ export function NPCLedgerModal() {
                 mergedVP.gait !== (currentVP.gait || '') ||
                 mergedVP.distinctMarks !== (currentVP.distinctMarks || '') ||
                 mergedVP.clothing !== (currentVP.clothing || '') ||
-                mergedVP.artStyle !== (currentVP.artStyle || 'Realistic')
+                mergedVP.artStyle !== (currentVP.artStyle || 'Anime')
             );
 
             const appearanceChanged = !existing.appearance && !!incoming.appearance;

@@ -1,4 +1,4 @@
-import type { AppSettings, ChatMessage, GameContext, LoreChunk, EndpointConfig, ProviderConfig, NPCEntry, ArchiveChunk } from '../types';
+import type { AppSettings, ChatMessage, GameContext, LoreChunk, EndpointConfig, ProviderConfig, NPCEntry, ArchiveScene } from '../types';
 import { countTokens } from './tokenizer';
 
 export type OpenAIMessage = {
@@ -13,6 +13,39 @@ function uid(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
+/**
+ * Robustly extracts the first JSON object or array found in a text string.
+ * Handles <think> tags, markdown code blocks, and leading/trailing chatter.
+ */
+function extractJson(text: string): string {
+    // 1. Remove reasoning blocks if present
+    let clean = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+
+    // 2. Try to find content between triple backticks first
+    const markdownMatch = clean.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (markdownMatch) {
+        clean = markdownMatch[1];
+    }
+
+    // 3. Final fallback: find the first { or [ and the last } or ]
+    const firstObj = clean.indexOf('{');
+    const firstArr = clean.indexOf('[');
+    const start = (firstObj !== -1 && (firstArr === -1 || firstObj < firstArr)) ? firstObj : firstArr;
+
+    if (start !== -1) {
+        const lastObj = clean.lastIndexOf('}');
+        const lastArr = clean.lastIndexOf(']');
+        const end = (lastObj !== -1 && (lastArr === -1 || lastObj > lastArr)) ? lastObj : lastArr;
+
+        if (end !== -1 && end > start) {
+            return clean.substring(start, end + 1).trim();
+        }
+    }
+
+    return clean.trim();
+}
+
+
 
 export function buildPayload(
     settings: AppSettings,
@@ -23,12 +56,17 @@ export function buildPayload(
     condensedUpToIndex?: number,
     relevantLore?: LoreChunk[],
     npcLedger?: NPCEntry[],
-    archiveRecall?: ArchiveChunk[]
+    archiveRecall?: ArchiveScene[],
+    sceneNumber?: string
 ): OpenAIMessage[] {
     // === 1. Build system prompt (protected — never compressed) ===
     const systemParts: string[] = [];
 
     // Static parts first for better LLM prefix caching!
+    // Inject scene number at the TOP so the AI sees the pre-assigned scene header
+    if (sceneNumber) {
+        systemParts.push(`[CURRENT SCENE: #${sceneNumber}]`);
+    }
     if (context.rulesRaw) systemParts.push(context.rulesRaw);
 
     // Template fields (only when toggled on)
@@ -36,6 +74,10 @@ export function buildPayload(
     if (context.headerIndexActive && context.headerIndex) systemParts.push(context.headerIndex);
     if (context.starterActive && context.starter) systemParts.push(context.starter);
     if (context.continuePromptActive && context.continuePrompt) systemParts.push(context.continuePrompt);
+
+    // Reasoning/Thinking model safety
+    systemParts.push("IMPORTANT: If you use a 'thinking' or 'reasoning' block (<think>...</think>), you MUST still provide the full narrative response AFTER the closing tag. Never end a turn with only a thinking block.");
+
     if (context.inventoryActive && context.inventory) systemParts.push(`[PLAYER INVENTORY]\n${context.inventory}`);
 
     // === 2. Condensed history — SEPARATE message so static rules are always prefix-cached ===
@@ -46,12 +88,37 @@ export function buildPayload(
 
     const dynamicSystemParts: string[] = [];
 
-    // === 2b. Archive Recall (Tier 4 — long-term memory) ===
+    // === 2b. Archive Recall (Tier 4 — lossless verbatim scenes) ===
     if (archiveRecall && archiveRecall.length > 0) {
-        const recallText = archiveRecall
-            .map(c => `[${c.sceneRange}]\n${c.summary}`)
-            .join('\n\n');
-        dynamicSystemParts.push(`[ARCHIVE RECALL]\n${recallText}\n[END ARCHIVE RECALL]`);
+        // --- Deduplication Logic ---
+        // Ensure we don't inject archive scenes that are already in the active history
+        // OR already summarized in the condensed summary.
+        const activeAssistantContents = history
+            .slice((condensedUpToIndex ?? -1) + 1)
+            .filter(m => m.role === 'assistant' && typeof m.content === 'string' && m.content.length > 20)
+            .map(m => m.content as string);
+
+        const filteredRecall = archiveRecall.filter(scene => {
+            // Skip if already present in active history
+            if (activeAssistantContents.some(asstContent => scene.content.includes(asstContent))) return false;
+
+            // Skip if the scene's key narrative text already appears in the condensed summary
+            // (means it was already condensed away)
+            if (condensedSummary) {
+                // Check if a significant chunk of the scene's text matches the summary
+                const sceneSlug = scene.content.slice(0, 120).toLowerCase();
+                if (condensedSummary.toLowerCase().includes(sceneSlug)) return false;
+            }
+
+            return true;
+        });
+
+        if (filteredRecall.length > 0) {
+            const recallText = filteredRecall
+                .map(s => `[SCENE #${s.sceneId}]\n${s.content}`)
+                .join('\n\n');
+            dynamicSystemParts.push(`[ARCHIVE RECALL — VERBATIM PAST SCENES]\n${recallText}\n[END ARCHIVE RECALL]`);
+        }
     }
 
     // === 3. Inject dynamic RAG Lore (DYNAMIC SUFFIX) ===
@@ -91,12 +158,25 @@ export function buildPayload(
         });
 
         if (activeNPCs.length > 0) {
-            console.log(`[NPC Ledger] Injected ${activeNPCs.length} active NPC(s):`, activeNPCs.map(n => n.name).join(', '));
-            const npcLines = activeNPCs.map(npc => {
-                const aliases = npc.aliases ? ` (${npc.aliases})` : '';
-                return `[${npc.name.toUpperCase()}${aliases}] Faction: ${npc.faction || '?'} | Relevance: ${npc.storyRelevance || '?'} | Status: ${npc.status || 'Alive'} | Disp: ${npc.disposition || '?'} | Goals: ${npc.goals || '?'} | N:${npc.nature} T:${npc.training} E:${npc.emotion} S:${npc.social} B:${npc.belief} G:${npc.ego}`;
-            });
-            dynamicSystemParts.push(`[ACTIVE NPC CONTEXT]\n${npcLines.join('\n')}\n[END NPC CONTEXT]`);
+            // Deduplicate NPCs against already injected lore chunks to avoid repeating character data twice
+            const loreCoveredNames = new Set(
+                (relevantLore ?? []).flatMap(c => {
+                    // Collect header and potential sub-headers from content to be thorough
+                    const contentHeaders = (c.content.match(/###\s+(.+)/g) || []).map(h => h.replace(/###\s+/g, '').toLowerCase());
+                    return [c.header.toLowerCase(), ...contentHeaders];
+                })
+            );
+
+            const uniqueNPCs = activeNPCs.filter(npc => !loreCoveredNames.has(npc.name.toLowerCase()));
+
+            if (uniqueNPCs.length > 0) {
+                console.log(`[NPC Ledger] Injected ${uniqueNPCs.length} active NPC(s):`, uniqueNPCs.map(n => n.name).join(', '));
+                const npcLines = uniqueNPCs.map(npc => {
+                    const aliases = npc.aliases ? ` (${npc.aliases})` : '';
+                    return `[${npc.name.toUpperCase()}${aliases}] Faction: ${npc.faction || '?'} | Relevance: ${npc.storyRelevance || '?'} | Status: ${npc.status || 'Alive'} | Disp: ${npc.disposition || '?'} | Goals: ${npc.goals || '?'} | N:${npc.nature} T:${npc.training} E:${npc.emotion} S:${npc.social} B:${npc.belief} G:${npc.ego}`;
+                });
+                dynamicSystemParts.push(`[ACTIVE NPC CONTEXT]\n${npcLines.join('\n')}\n[END NPC CONTEXT]`);
+            }
         }
     }
 
@@ -138,7 +218,7 @@ export function buildPayload(
 
         const openAIMsg: OpenAIMessage = {
             role: msg.role as 'system' | 'user' | 'assistant' | 'tool',
-            content: msg.content || null
+            content: msg.content ?? null
         };
         if (msg.name) openAIMsg.name = msg.name;
         if (msg.tool_calls) openAIMsg.tool_calls = msg.tool_calls;
@@ -146,6 +226,16 @@ export function buildPayload(
 
         fitted.unshift(openAIMsg);
         used += cost;
+    }
+
+    // === 4b. Orphaned Tool Protection ===
+    // If truncation happens to split an assistant from its tool response, the API will fail.
+    // We must ensure that a message with role 'tool' is never the first message in our history segment
+    // unless preceded by its corresponding assistant tool_call. 
+    // Since we unshift in reverse, we just need to trim any 'tool' messages from the front.
+    while (fitted.length > 0 && fitted[0].role === 'tool') {
+        console.warn(`[Payload] Truncating orphaned tool response for ID: ${fitted[0].tool_call_id}`);
+        fitted.shift();
     }
 
     // === 5. Assemble: Static → Condensed → History → Dynamic(Lore+NPC) → User ===
@@ -156,10 +246,10 @@ export function buildPayload(
     if (condensedContent) {
         messages.push({ role: 'system', content: condensedContent });
     }
-    messages.push(...fitted);
     if (dynamicSystemContent) {
         messages.push({ role: 'system', content: dynamicSystemContent });
     }
+    messages.push(...fitted);
     messages.push({ role: 'user', content: userMessage });
 
     return messages;
@@ -169,7 +259,7 @@ export async function sendMessage(
     provider: EndpointConfig | ProviderConfig,
     messages: OpenAIMessage[],
     onChunk: (text: string) => void,
-    onDone: (toolCall?: { id: string, name: string, arguments: string }) => void,
+    onDone: (text: string, toolCall?: { id: string; name: string; arguments: string }) => void,
     onError: (err: string) => void,
     tools?: unknown[],
     abortController?: AbortController
@@ -302,9 +392,9 @@ export async function sendMessage(
         }
 
         if (tcName) {
-            onDone({ id: tcId, name: tcName, arguments: tcArgs });
+            onDone(fullText, { id: tcId, name: tcName, arguments: tcArgs });
         } else {
-            onDone();
+            onDone(fullText);
         }
     } catch (err) {
         onError(err instanceof Error ? err.message : 'Unknown network error');
@@ -394,8 +484,7 @@ Note: the 6 axes (nature...ego) MUST be integers from 1 to 10.`;
         );
 
         if (fullJsonStr) {
-            // Strip potential markdown code blocks if the LLM ignored instructions
-            const cleanStr = fullJsonStr.replace(/```json/gi, '').replace(/```/g, '').trim();
+            const cleanStr = extractJson(fullJsonStr);
 
             try {
                 const parsed = JSON.parse(cleanStr);
@@ -409,7 +498,7 @@ Note: the 6 axes (nature...ego) MUST be integers from 1 to 10.`;
                     storyRelevance: parsed.storyRelevance || 'Unknown',
                     appearance: '', // legacy
                     visualProfile: parsed.visualProfile || {
-                        race: 'Unknown', gender: 'Unknown', ageRange: 'Unknown', build: 'Unknown', symmetry: 'Unknown', hairStyle: 'Unknown', eyeColor: 'Unknown', skinTone: 'Unknown', gait: 'Unknown', distinctMarks: 'None', clothing: 'Unknown', artStyle: 'Realistic'
+                        race: 'Unknown', gender: 'Unknown', ageRange: 'Unknown', build: 'Unknown', symmetry: 'Unknown', hairStyle: 'Unknown', eyeColor: 'Unknown', skinTone: 'Unknown', gait: 'Unknown', distinctMarks: 'None', clothing: 'Unknown', artStyle: 'Anime'
                     },
                     disposition: parsed.disposition || 'Neutral',
                     goals: parsed.goals || 'Unknown',
@@ -489,7 +578,7 @@ Example output: ["TAG_ONE", "TAG_TWO", "TAG_THREE"]`;
     );
 
     if (fullJsonStr) {
-        const cleanStr = fullJsonStr.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const cleanStr = extractJson(fullJsonStr);
         try {
             const parsed = JSON.parse(cleanStr);
             if (Array.isArray(parsed) && parsed.length >= 3 && parsed.every((t: unknown) => typeof t === 'string')) {
@@ -580,7 +669,7 @@ RESPOND ONLY WITH VALID JSON.`;
         );
 
         if (fullJsonStr) {
-            const cleanStr = fullJsonStr.replace(/```json/gi, '').replace(/```/g, '').trim();
+            const cleanStr = extractJson(fullJsonStr);
             const parsed = JSON.parse(cleanStr);
 
             if (parsed.updates && Array.isArray(parsed.updates)) {
@@ -601,7 +690,7 @@ RESPOND ONLY WITH VALID JSON.`;
                                 ...targetNpc.visualProfile, // fallback to existing (even if unknown)
                                 ...changes.visualProfile,
                                 // Enforce artStyle persistence if they had one or set default
-                                artStyle: targetNpc.visualProfile?.artStyle || 'Realistic'
+                                artStyle: targetNpc.visualProfile?.artStyle || 'Anime'
                             };
                         }
 

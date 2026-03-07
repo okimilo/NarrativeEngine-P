@@ -99,6 +99,7 @@ app.delete('/api/campaigns/:id', (req, res) => {
         path.join(CAMPAIGNS_DIR, `${id}.lore.json`),
         path.join(CAMPAIGNS_DIR, `${id}.npcs.json`),
         path.join(CAMPAIGNS_DIR, `${id}.archive.md`),
+        path.join(CAMPAIGNS_DIR, `${id}.archive.index.json`),
     ];
     for (const f of files) {
         if (fs.existsSync(f)) fs.unlinkSync(f);
@@ -160,11 +161,15 @@ app.put('/api/campaigns/:id/npcs', (req, res) => {
 
 
 // ═══════════════════════════════════════════
-//  Archive (verbatim chat log)
+//  Archive (verbatim chat log + index)
 // ═══════════════════════════════════════════
 
 function archivePath(id) {
     return path.join(CAMPAIGNS_DIR, `${id}.archive.md`);
+}
+
+function archiveIndexPath(id) {
+    return path.join(CAMPAIGNS_DIR, `${id}.archive.index.json`);
 }
 
 function getNextSceneNumber(id) {
@@ -178,17 +183,63 @@ function getNextSceneNumber(id) {
     return num + 1;
 }
 
-// Append a scene (user + assistant exchange)
+/**
+ * Extract keywords from raw text for the archive index.
+ * Captures: proper nouns (capitalised 3+ char words), quoted strings,
+ * [MEMORABLE: ...] tags from the condenser.
+ */
+function extractIndexKeywords(text) {
+    const keywords = new Set();
+    // Proper nouns — capitalised words 3+ chars
+    const properNouns = text.match(/[A-Z][A-Za-z]{2,}(?:\s[A-Z][A-Za-z]{2,})*/g) || [];
+    const stopWords = new Set(['The', 'And', 'For', 'Are', 'But', 'Not', 'You', 'All', 'Can', 'Has',
+        'Was', 'One', 'His', 'Her', 'Had', 'May', 'Who', 'Been', 'Some', 'They', 'Will', 'Each', 'That',
+        'This', 'With', 'From', 'Then', 'When', 'What', 'Where', 'There', 'Those', 'These', 'User', 'Scene']);
+    for (const noun of properNouns) {
+        if (!stopWords.has(noun)) keywords.add(noun.toLowerCase());
+    }
+    // Quoted strings — e.g. "I will return"
+    const quoted = text.match(/"([^"]{4,60})"/g) || [];
+    for (const q of quoted) keywords.add(q.replace(/"/g, '').toLowerCase().trim());
+    // [MEMORABLE: ...] tags from condenser
+    const memorable = text.match(/\[MEMORABLE:\s*"([^"]+)"\]/g) || [];
+    for (const m of memorable) {
+        const inner = m.match(/\[MEMORABLE:\s*"([^"]+)"\]/);
+        if (inner) keywords.add(inner[1].toLowerCase().trim());
+    }
+    return Array.from(keywords).slice(0, 20);
+}
+
+/** Extract NPC names (words wrapped in [**Name**] format from GM output). */
+function extractNPCNames(text) {
+    const names = new Set();
+    const matches = text.matchAll(/\[\*{0,2}([A-Za-z][A-Za-z0-9 '-]{1,30})\*{0,2}\]/g);
+    for (const m of matches) names.add(m[1].trim());
+    return Array.from(names).slice(0, 15);
+}
+
+// Pre-assign next scene number — called by client BEFORE sending to AI
+app.get('/api/campaigns/:id/archive/next-scene', (req, res) => {
+    const next = getNextSceneNumber(req.params.id);
+    const padded = String(next).padStart(3, '0');
+    res.json({ sceneNumber: next, sceneId: padded });
+});
+
+// Append a scene (user + assistant exchange) — also writes index entry
 app.post('/api/campaigns/:id/archive', (req, res) => {
     ensureDirs();
     const { userContent, assistantContent } = req.body;
     const fp = archivePath(req.params.id);
+    const idxp = archiveIndexPath(req.params.id);
     const sceneNum = getNextSceneNumber(req.params.id);
-    const timestamp = new Date().toLocaleString();
+    const sceneId = String(sceneNum).padStart(3, '0');
+    const timestamp = Date.now();
+    const timestampStr = new Date(timestamp).toLocaleString();
 
+    // Write lossless scene to .archive.md
     const entry = [
-        `## SCENE ${String(sceneNum).padStart(3, '0')}`,
-        `*${timestamp}*`,
+        `## SCENE ${sceneId}`,
+        `*${timestampStr}*`,
         '',
         `**[USER]**`,
         userContent,
@@ -199,9 +250,35 @@ app.post('/api/campaigns/:id/archive', (req, res) => {
         '---',
         '',
     ].join('\n');
-
     fs.appendFileSync(fp, entry, 'utf-8');
-    res.json({ ok: true, sceneNumber: sceneNum });
+
+    // Build and append index entry to .archive.index.json
+    const combinedText = `${userContent}\n${assistantContent}`;
+    const indexEntry = {
+        sceneId,
+        timestamp,
+        keywords: extractIndexKeywords(combinedText),
+        npcsMentioned: extractNPCNames(assistantContent),
+        userSnippet: userContent.slice(0, 120),
+    };
+    const existing = readJson(idxp, []);
+    existing.push(indexEntry);
+    writeJson(idxp, existing);
+
+    res.json({ ok: true, sceneNumber: sceneNum, sceneId });
+});
+
+// Clear archive (.archive.md and .archive.index.json)
+app.delete('/api/campaigns/:id/archive', (req, res) => {
+    const id = req.params.id;
+    const files = [
+        archivePath(id),
+        archiveIndexPath(id),
+    ];
+    for (const f of files) {
+        if (fs.existsSync(f)) fs.unlinkSync(f);
+    }
+    res.json({ ok: true });
 });
 
 // Get current scene count
@@ -213,22 +290,65 @@ app.get('/api/campaigns/:id/archive', (req, res) => {
 });
 
 // ═══════════════════════════════════════════
-//  Archive (Structured Tier 4 Memory)
+//  Archive Index & Scene Retrieval (Tier 4)
 // ═══════════════════════════════════════════
 
-app.get('/api/campaigns/:id/archive/chunks', (req, res) => {
-    const filePath = path.join(CAMPAIGNS_DIR, `${req.params.id}.archive.json`);
-    const chunks = readJson(filePath, []);
-    res.json(chunks);
+// Return the full .archive.index.json for client-side retrieval
+app.get('/api/campaigns/:id/archive/index', (req, res) => {
+    const entries = readJson(archiveIndexPath(req.params.id), []);
+    res.json(entries);
 });
 
-app.post('/api/campaigns/:id/archive/chunk', (req, res) => {
-    ensureDirs();
-    const filePath = path.join(CAMPAIGNS_DIR, `${req.params.id}.archive.json`);
-    const chunks = readJson(filePath, []);
-    chunks.push(req.body); // append the new ArchiveChunk
-    writeJson(filePath, chunks);
-    res.json({ ok: true });
+// Fetch full verbatim scenes by comma-separated scene IDs
+app.get('/api/campaigns/:id/archive/scenes', (req, res) => {
+    const fp = archivePath(req.params.id);
+    if (!fs.existsSync(fp)) return res.json([]);
+    const idsParam = req.query.ids || '';
+    const ids = idsParam.split(',').map(s => s.trim()).filter(Boolean);
+    if (ids.length === 0) return res.json([]);
+
+    const raw = fs.readFileSync(fp, 'utf-8');
+    // Split on ## SCENE boundaries
+    const sceneBlocks = raw.split(/^(?=## SCENE )/m);
+    const result = [];
+    for (const block of sceneBlocks) {
+        const match = block.match(/^## SCENE (\d+)/);
+        if (!match) continue;
+        const sceneId = match[1].padStart(3, '0');
+        if (ids.includes(sceneId)) {
+            result.push({ sceneId, content: block.trim() });
+        }
+    }
+    res.json(result);
+});
+
+// Rollback: remove all scenes >= sceneId from .archive.md and .archive.index.json
+app.delete('/api/campaigns/:id/archive/scenes-from/:sceneId', (req, res) => {
+    const fp = archivePath(req.params.id);
+    const idxp = archiveIndexPath(req.params.id);
+    const fromId = req.params.sceneId.padStart(3, '0');
+    const fromNum = parseInt(fromId, 10);
+
+    // Trim .archive.md
+    if (fs.existsSync(fp)) {
+        const raw = fs.readFileSync(fp, 'utf-8');
+        const sceneBlocks = raw.split(/^(?=## SCENE )/m);
+        const kept = sceneBlocks.filter(block => {
+            const match = block.match(/^## SCENE (\d+)/);
+            if (!match) return true; // keep preamble if any
+            return parseInt(match[1], 10) < fromNum;
+        });
+        fs.writeFileSync(fp, kept.join(''), 'utf-8');
+    }
+
+    // Trim .archive.index.json
+    if (fs.existsSync(idxp)) {
+        const entries = readJson(idxp, []);
+        const kept = entries.filter(e => parseInt(e.sceneId, 10) < fromNum);
+        writeJson(idxp, kept);
+    }
+
+    res.json({ ok: true, removedFrom: fromId });
 });
 
 // Open archive in OS default app

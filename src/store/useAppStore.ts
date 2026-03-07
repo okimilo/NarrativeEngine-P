@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AppSettings, GameContext, ChatMessage, CondenserState, LoreChunk, ProviderConfig, AIPreset, EndpointConfig, NPCEntry, ArchiveChunk } from '../types';
+import type { AppSettings, GameContext, ChatMessage, CondenserState, LoreChunk, ProviderConfig, AIPreset, EndpointConfig, NPCEntry, ArchiveIndexEntry } from '../types';
 import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { encryptSettingsPresets, decryptSettingsPresets } from '../services/settingsCrypto';
 
@@ -81,8 +81,8 @@ type AppState = {
     loreChunks: LoreChunk[];
     setLoreChunks: (chunks: LoreChunk[]) => void;
     updateLoreChunk: (id: string, patch: Partial<LoreChunk>) => void;
-    archiveChunks: ArchiveChunk[];
-    setArchiveChunks: (chunks: ArchiveChunk[]) => void;
+    archiveIndex: ArchiveIndexEntry[];
+    setArchiveIndex: (entries: ArchiveIndexEntry[]) => void;
     npcLedger: NPCEntry[];
     setNPCLedger: (npcs: NPCEntry[]) => void;
     addNPC: (npc: NPCEntry) => void;
@@ -105,6 +105,7 @@ type AppState = {
     deleteMessagesFrom: (id: string) => void;
     setStreaming: (v: boolean) => void;
     clearChat: () => void;
+    clearArchive: () => void;
 
     // Condenser
     condenser: CondenserState;
@@ -234,6 +235,7 @@ const defaultSettings: AppSettings = {
     autoCondenseEnabled: true,
     debugMode: false,
     theme: 'light',
+    showReasoning: true,
 };
 
 function applyTheme(theme: 'light' | 'dark') {
@@ -296,6 +298,7 @@ function migrateSettings(data: Record<string, unknown>): AppSettings {
             autoCondenseEnabled: (raw.autoCondenseEnabled as boolean) ?? true,
             debugMode: (raw.debugMode as boolean) ?? false,
             theme: (raw.theme as 'light' | 'dark') ?? 'light',
+            showReasoning: (raw.showReasoning as boolean) ?? true,
         };
     }
 
@@ -339,6 +342,7 @@ function migrateSettings(data: Record<string, unknown>): AppSettings {
         autoCondenseEnabled: (raw.autoCondenseEnabled as boolean) ?? true,
         debugMode: (raw.debugMode as boolean) ?? false,
         theme: (raw.theme as 'light' | 'dark') ?? 'light',
+        showReasoning: (raw.showReasoning as boolean) ?? true,
     };
 }
 
@@ -478,8 +482,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
         }
         return { loreChunks: newChunks };
     }),
-    archiveChunks: [],
-    setArchiveChunks: (chunks) => set({ archiveChunks: chunks }),
+    archiveIndex: [],
+    setArchiveIndex: (entries) => set({ archiveIndex: entries }),
     npcLedger: [],
     setNPCLedger: (npcs) => set((s) => {
         debouncedSaveNPCLedger(s.activeCampaignId, npcs);
@@ -579,6 +583,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
         debouncedSaveCampaignState(s.activeCampaignId, { context: s.context, messages: [], condenser: newCondenser });
         return { messages: [], condenser: newCondenser };
     }),
+    clearArchive: () => set({ archiveIndex: [] }),
 
     // UI defaults
     settingsOpen: false,

@@ -1,4 +1,5 @@
 import { useAppStore } from '../store/useAppStore';
+import { countTokens } from '../services/tokenizer';
 
 export function TokenGauge() {
     const { context, messages, settings, condenser } = useAppStore();
@@ -10,12 +11,19 @@ export function TokenGauge() {
     if (context.headerIndexActive && context.headerIndex) systemParts.push(context.headerIndex);
     if (context.starterActive && context.starter) systemParts.push(context.starter);
     if (context.continuePromptActive && context.continuePrompt) systemParts.push(context.continuePrompt);
+    if (context.characterProfileActive && context.characterProfile) systemParts.push(`[CHARACTER PROFILE]\n${context.characterProfile}`);
+    if (context.inventoryActive && context.inventory) systemParts.push(`[PLAYER INVENTORY]\n${context.inventory}`);
     if (condenser.condensedSummary) systemParts.push(condenser.condensedSummary);
-    const systemText = systemParts.join('\n\n');
-    const systemTokens = Math.ceil(systemText.length / 4);
 
-    const historyText = messages.map((m) => m.content).join('');
-    const historyTokens = Math.ceil(historyText.length / 4);
+    const systemText = systemParts.join('\n\n');
+    const systemTokens = countTokens(systemText);
+
+    const activeMessages = (condenser.condensedUpToIndex !== undefined && condenser.condensedUpToIndex >= 0)
+        ? messages.slice(condenser.condensedUpToIndex + 1)
+        : messages;
+
+    const historyText = activeMessages.map((m) => m.content || '').join('');
+    const historyTokens = countTokens(historyText);
 
     const total = settings.contextLimit;
     const remaining = Math.max(0, total - systemTokens - historyTokens);

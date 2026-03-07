@@ -1,8 +1,6 @@
 import type { ChatMessage, GameContext, EndpointConfig, ProviderConfig } from '../types';
 
 import { countTokens } from './tokenizer';
-import { buildArchiveChunk } from './archiveMemory';
-import { saveArchiveChunk } from '../store/campaignStore';
 
 const VERBATIM_WINDOW = 8;
 const CONDENSE_BUDGET_RATIO = 0.75;
@@ -47,8 +45,9 @@ function buildCondenserPrompt(
         '3. Use the Canonical Terms below — DO NOT paraphrase, rename, or synonym-swap any proper nouns',
         '4. Keep quest/objective updates',
         '5. Drop flavour text and generic narration',
-        '6. Output format: bullet points grouped by scene/event',
-        '7. Be extremely concise — aim for 70% compression',
+        '6. EXCEPTION: Tag any memorable/dramatic moments (epic quotes, confessions, dramatic reveals, promises) with [MEMORABLE: "exact quote or moment"]. These survive future compression.',
+        '7. Output format: bullet points grouped by scene/event',
+        '8. Be extremely concise — aim for 70% compression',
     ];
 
     if (canonBlock) {
@@ -70,8 +69,8 @@ export async function condenseHistory(
     context: GameContext,
     condensedUpToIndex: number,
     existingSummary: string,
-    campaignId: string,
-    npcNames: string[]
+    _campaignId: string,  // retained for API compat — T4 archive now handled by server on append
+    _npcNames: string[]   // retained for API compat
 ): Promise<{ summary: string; upToIndex: number }> {
     const uncondensed = messages.slice(condensedUpToIndex + 1);
     const toCondense = uncondensed.slice(0, -VERBATIM_WINDOW);
@@ -86,11 +85,10 @@ export async function condenseHistory(
     if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
 
     // --- Phase 4: T3 → T4 Promotion ---
+    // When condensed summary exceeds threshold, meta-compress it.
+    // T4 lossless content lives in .archive.md; no chunk needed here.
     if (finalExistingSummary && countTokens(finalExistingSummary) > META_SUMMARY_THRESHOLD) {
-        console.log('[Archive Memory] Promoting T3 summary to T4 archive chunk...', { tokens: countTokens(finalExistingSummary) });
-        const chunk = buildArchiveChunk(finalExistingSummary, context.headerIndex || 'Unknown Scene', npcNames);
-        await saveArchiveChunk(campaignId, chunk);
-
+        console.log('[Archive Memory] Promoting T3 summary to meta-summary...', { tokens: countTokens(finalExistingSummary) });
         const metaPrompt = `You are a TTRPG session scribe. Compress the following older session summary into a highly condensed story-arc level summary (max 3 paragraphs). Preserve major character deaths, epic loot, unresolved plot hooks, and major quest completions.\n\nOLDER SUMMARY:\n${finalExistingSummary}`;
 
         const metaRes = await fetch(url, {

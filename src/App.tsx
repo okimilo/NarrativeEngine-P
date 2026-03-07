@@ -8,7 +8,7 @@ import { ChatArea } from './components/ChatArea';
 import { SettingsModal } from './components/SettingsModal';
 import { NPCLedgerModal } from './components/NPCLedgerModal';
 import {
-  loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveChunks,
+  loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex,
 } from './store/campaignStore';
 
 const DEFAULT_CONDENSER = { condensedSummary: '', condensedUpToIndex: -1, isCondensing: false };
@@ -42,11 +42,11 @@ export default function App() {
     setCampaignLoaded(false);
 
     (async () => {
-      const [state, chunks, npcs, archiveChunks] = await Promise.all([
+      const [state, chunks, npcs, archiveIndex] = await Promise.all([
         loadCampaignState(activeCampaignId),
         getLoreChunks(activeCampaignId),
         getNPCLedger(activeCampaignId),
-        loadArchiveChunks(activeCampaignId),
+        loadArchiveIndex(activeCampaignId),
       ]);
       if (cancelled) return;
 
@@ -56,7 +56,7 @@ export default function App() {
         condenser: state?.condenser ?? DEFAULT_CONDENSER,
         loreChunks: chunks,
         npcLedger: npcs,
-        archiveChunks,
+        archiveIndex,
       });
       setCampaignLoaded(true);
     })();

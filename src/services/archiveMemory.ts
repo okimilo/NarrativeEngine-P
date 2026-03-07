@@ -1,128 +1,140 @@
-import type { ArchiveChunk, ChatMessage } from '../types';
+import type { ArchiveIndexEntry, ArchiveScene, ChatMessage } from '../types';
 import { countTokens } from './tokenizer';
 
-// Common stop words to exclude from auto-extracted keywords
-const STOP_WORDS = new Set([
-    'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'has', 'her',
-    'was', 'one', 'our', 'out', 'his', 'had', 'may', 'who', 'been', 'some',
-    'them', 'than', 'its', 'into', 'only', 'with', 'from', 'this', 'that',
-    'they', 'will', 'each', 'make', 'like', 'been', 'have', 'many', 'most',
-    'also', 'made', 'after', 'being', 'their', 'much', 'very', 'when', 'what',
-    'which', 'more', 'other', 'about', 'such', 'over', 'just', 'does', 'then',
-    'could', 'would', 'should', 'where', 'there', 'those', 'these', 'still',
-    'well', 'back', 'even', 'here', 'every', 'both', 'through', 'between',
-    'before', 'after', 'during', 'without', 'again', 'because', 'under',
-    'real', 'name', 'alias', 'note', 'key', 'class', 'status', 'location',
-    'currently', 'known', 'anyone', 'power', 'none', 'variable',
-]);
+/**
+ * archiveMemory.ts
+ *
+ * T4 Memory — Index-based retrieval over lossless .archive.md content.
+ *
+ * Flow:
+ *   1. retrieveArchiveMemory() — keyword-scores ArchiveIndexEntry[] → returns ranked scene IDs
+ *   2. fetchArchiveScenes()    — fetches full verbatim scene content from server
+ *   3. buildPayload()          — injects full scenes into [ARCHIVE RECALL] context block
+ */
 
-function extractKeywords(text: string, existingNPCNames: string[] = []): string[] {
-    const keywords = new Set<string>();
+// ─── Keyword Scoring ───
 
-    // 1. Existing NPCs
-    for (const npc of existingNPCNames) {
-        if (text.toLowerCase().includes(npc.toLowerCase())) {
-            keywords.add(npc.toLowerCase());
-            // Add individual parts of the name
-            npc.split(' ').forEach(w => {
-                if (w.length > 2 && !STOP_WORDS.has(w.toLowerCase())) {
-                    keywords.add(w.toLowerCase());
-                }
-            });
+/**
+ * Score an index entry against the current context.
+ * Returns a relevance score (higher = more relevant).
+ */
+function scoreEntry(entry: ArchiveIndexEntry, contextText: string): number {
+    let score = 0;
+
+    for (const kw of entry.keywords) {
+        if (contextText.includes(kw)) {
+            const exactMatch = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+            score += exactMatch.test(contextText) ? 2 : 0.5;
         }
     }
 
-    // 2. Proper nouns (capitalized words, 3+ chars)
-    const properNouns = text.match(/[A-Z][A-Za-z]{2,}(?:\s[A-Z][A-Za-z]{2,})*/g);
-    if (properNouns) {
-        for (const noun of properNouns) {
-            const lower = noun.toLowerCase();
-            if (!STOP_WORDS.has(lower)) {
-                keywords.add(lower);
-            }
+    // NPC name bonus — stronger signal
+    for (const npc of entry.npcsMentioned) {
+        const lower = npc.toLowerCase();
+        if (contextText.includes(lower)) {
+            score += 3;
         }
     }
 
-    return Array.from(keywords).slice(0, 15); // Cap at 15
+    return score;
 }
 
-function uid(): string {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-}
-
-export function buildArchiveChunk(
-    bulletPoints: string,
-    sceneLabel: string,
-    existingNPCNames: string[]
-): ArchiveChunk {
-    return {
-        id: uid(),
-        sceneRange: sceneLabel,
-        timestamp: Date.now(),
-        summary: bulletPoints,
-        keywords: extractKeywords(bulletPoints, existingNPCNames),
-        tokens: countTokens(`[${sceneLabel}]\n${bulletPoints}`)
-    };
-}
-
+/**
+ * Search the archive index by keyword relevance, return matching scene IDs
+ * ranked by score (best first).
+ */
 export function retrieveArchiveMemory(
-    chunks: ArchiveChunk[],
+    index: ArchiveIndexEntry[],
     userMessage: string,
     recentMessages: ChatMessage[],
-    tokenBudget = 3000
-): ArchiveChunk[] {
-    if (!chunks || chunks.length === 0) return [];
+    maxScenes = 3
+): string[] {
+    if (!index || index.length === 0) {
+        console.log('[Archive Retrieval] Index is empty — no recall.');
+        return [];
+    }
 
-    // Extract search terms from current turn and recent history
     const contextText = [
         userMessage,
-        ...recentMessages.slice(-3).map(m => m.content)
+        ...recentMessages.slice(-3).map(m => m.content || '')
     ].join('\n').toLowerCase();
 
-    // 1. Score each chunk
-    const scored = chunks.map(chunk => {
-        let score = 0;
-        // Count keyword matches in the current context
-        for (const kw of chunk.keywords) {
-            if (contextText.includes(kw)) {
-                // Exact word match gets more points (prevent "ash" matching "crash")
-                const exactMatch = new RegExp(`\\b${kw}\\b`, 'i');
-                if (exactMatch.test(contextText)) {
-                    score += 2;
-                } else {
-                    score += 0.5; // partial match (substring)
-                }
-            }
-        }
+    const scored = index.map(entry => ({
+        sceneId: entry.sceneId,
+        score: scoreEntry(entry, contextText),
+    }));
 
-        // Bonus for recent temporal chunks if they score above 0
-        if (score > 0) {
-            const ageChunks = chunks.length;
-            const chunkIndex = chunks.indexOf(chunk);
-            score += (chunkIndex / ageChunks) * 0.5; // slight bias to more recent
-        }
-
-        return { chunk, score };
-    });
-
-    // 2. Filter non-zero scores and sort by descending score
     const candidates = scored
         .filter(s => s.score > 0)
         .sort((a, b) => b.score - a.score)
-        .map(s => s.chunk);
+        .slice(0, maxScenes);
 
-    // 3. Fill budget
-    const selected: ArchiveChunk[] = [];
-    let usedTokens = 0;
+    console.log(
+        `[Archive Retrieval] Scored ${index.length} index entries. ` +
+        `${candidates.length} matched. ` +
+        `Selected scenes: [${candidates.map(c => c.sceneId).join(', ')}]`
+    );
 
-    for (const chunk of candidates) {
-        if (usedTokens + chunk.tokens > tokenBudget) break;
-        selected.push(chunk);
-        usedTokens += chunk.tokens;
+    return candidates.map(c => c.sceneId);
+}
+
+/**
+ * Fetch full verbatim scene content from the server for a set of scene IDs.
+ * Returns scenes within the token budget, sorted chronologically.
+ */
+export async function fetchArchiveScenes(
+    campaignId: string,
+    sceneIds: string[],
+    tokenBudget = 3000
+): Promise<ArchiveScene[]> {
+    if (sceneIds.length === 0) return [];
+
+    try {
+        const idsParam = sceneIds.join(',');
+        const res = await fetch(`/api/campaigns/${campaignId}/archive/scenes?ids=${idsParam}`);
+        if (!res.ok) {
+            console.warn('[Archive Retrieval] Failed to fetch scenes:', res.status);
+            return [];
+        }
+
+        const raw: { sceneId: string; content: string }[] = await res.json();
+
+        // Apply token budget, sorted chronologically (lowest scene ID first)
+        const sorted = raw.sort((a, b) => parseInt(a.sceneId) - parseInt(b.sceneId));
+        const selected: ArchiveScene[] = [];
+        let usedTokens = 0;
+
+        for (const scene of sorted) {
+            const tokens = countTokens(scene.content);
+            if (usedTokens + tokens > tokenBudget) break;
+            selected.push({ sceneId: scene.sceneId, content: scene.content, tokens });
+            usedTokens += tokens;
+        }
+
+        console.log(
+            `[Archive Retrieval] Fetched ${selected.length}/${raw.length} scenes ` +
+            `(${usedTokens} tokens used of ${tokenBudget} budget).`
+        );
+
+        return selected;
+    } catch (err) {
+        console.warn('[Archive Retrieval] Error fetching scenes:', err);
+        return [];
     }
+}
 
-    // Sort selected chronologically so they make sense to the LLM
-    selected.sort((a, b) => a.timestamp - b.timestamp);
-
-    return selected;
+/**
+ * Convenience: search + fetch in one call.
+ * Used in ChatArea before buildPayload().
+ */
+export async function recallArchiveScenes(
+    campaignId: string,
+    index: ArchiveIndexEntry[],
+    userMessage: string,
+    recentMessages: ChatMessage[],
+    tokenBudget = 3000
+): Promise<ArchiveScene[]> {
+    const matchedIds = retrieveArchiveMemory(index, userMessage, recentMessages);
+    if (matchedIds.length === 0) return [];
+    return fetchArchiveScenes(campaignId, matchedIds, tokenBudget);
 }

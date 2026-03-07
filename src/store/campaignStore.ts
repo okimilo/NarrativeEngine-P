@@ -1,4 +1,4 @@
-import type { Campaign, LoreChunk, GameContext, ChatMessage, CondenserState, NPCEntry, ArchiveChunk } from '../types';
+import type { Campaign, LoreChunk, GameContext, ChatMessage, CondenserState, NPCEntry, ArchiveIndexEntry } from '../types';
 
 const API = '/api';
 
@@ -81,17 +81,10 @@ export async function getNPCLedger(campaignId: string): Promise<NPCEntry[]> {
     if (!res.ok) return [];
     return res.json();
 }
-// ─── Archive Chunks (Tier 4) ───
-export async function saveArchiveChunk(campaignId: string, chunk: ArchiveChunk): Promise<void> {
-    await fetch(`${API}/campaigns/${campaignId}/archive/chunk`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(chunk),
-    });
-}
-
-export async function loadArchiveChunks(campaignId: string): Promise<ArchiveChunk[]> {
-    const res = await fetch(`${API}/campaigns/${campaignId}/archive/chunks`);
+// ─── Archive Index (Tier 4) ───
+/** Load the archive search index from disk. Built automatically by the server on every turn. */
+export async function loadArchiveIndex(campaignId: string): Promise<ArchiveIndexEntry[]> {
+    const res = await fetch(`${API}/campaigns/${campaignId}/archive/index`);
     if (!res.ok) return [];
     return res.json();
 }

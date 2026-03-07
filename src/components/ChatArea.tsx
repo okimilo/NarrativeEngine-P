@@ -7,7 +7,7 @@ import type { NPCEntry, ChatMessage, EndpointConfig, ProviderConfig } from '../t
 import { shouldCondense, condenseHistory } from '../services/condenser';
 import { runSaveFilePipeline } from '../services/saveFileEngine';
 import { retrieveRelevantLore, searchLoreByQuery } from '../services/loreRetriever';
-import { retrieveArchiveMemory } from '../services/archiveMemory';
+import { recallArchiveScenes } from '../services/archiveMemory';
 import { set } from 'idb-keyval';
 
 function uid(): string {
@@ -22,7 +22,9 @@ export function ChatArea() {
         condenser,
         loreChunks,
         npcLedger,
-        archiveChunks,
+        archiveIndex,
+        setArchiveIndex,
+        clearArchive,
         updateLastAssistant,
         updateContext,
         setCondensed,
@@ -92,6 +94,16 @@ export function ChatArea() {
                 npcLedger.map(n => n.name)
             );
             setCondensed(result.summary, result.upToIndex);
+
+            // Reload archive index so newly indexed scenes are available for retrieval
+            if (campaignId) {
+                const res = await fetch(`/api/campaigns/${campaignId}/archive/index`);
+                if (res.ok) {
+                    const fresh = await res.json();
+                    setArchiveIndex(fresh);
+                    console.log(`[Archive] Reloaded index: ${fresh.length} entries`);
+                }
+            }
         } catch (err) {
             console.error('[Condenser]', err);
         } finally {
@@ -130,8 +142,23 @@ export function ChatArea() {
             ? retrieveRelevantLore(loreChunks, context.canonState, context.headerIndex, textToUse, 1200, messages)
             : undefined;
 
-        const archiveRecall = archiveChunks.length > 0
-            ? retrieveArchiveMemory(archiveChunks, textToUse, messages, 3000)
+        // Pre-assign scene number from server BEFORE building payload
+        // Server reads .archive.md to get the true next scene number
+        let sceneNumber: string | undefined;
+        if (activeCampaignId) {
+            try {
+                const snRes = await fetch(`/api/campaigns/${activeCampaignId}/archive/next-scene`);
+                if (snRes.ok) {
+                    const snData = await snRes.json();
+                    sceneNumber = snData.sceneId; // zero-padded string e.g. "014"
+                    console.log(`[Scene Engine] Pre-assigned scene #${sceneNumber}`);
+                }
+            } catch { /* non-critical, AI will just not have the scene number */ }
+        }
+
+        // Archive recall — index-based, returns full verbatim scenes
+        const archiveRecall = (archiveIndex.length > 0 && activeCampaignId)
+            ? await recallArchiveScenes(activeCampaignId, archiveIndex, textToUse, messages, 3000)
             : undefined;
 
         let newDC = context.surpriseDC ?? 98;
@@ -234,8 +261,59 @@ export function ChatArea() {
             condenser.condensedUpToIndex,
             relevantLore,
             npcLedger,
-            archiveRecall
+            archiveRecall,
+            sceneNumber
         );
+
+        const sanitizePayloadForApi = (rawPayload: any[], allowTools: boolean) => {
+            const cleaned: any[] = [];
+            const openToolCalls = new Set<string>();
+
+            for (const msg of rawPayload) {
+                if (!msg || typeof msg !== 'object') continue;
+
+                if (msg.role === 'assistant') {
+                    if (!allowTools || !Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) {
+                        const { tool_calls, ...assistantNoTools } = msg;
+                        cleaned.push(assistantNoTools);
+                        continue;
+                    }
+
+                    const validCalls = msg.tool_calls.filter((tc: any) =>
+                        tc && tc.type === 'function' && typeof tc.id === 'string' &&
+                        tc.function && typeof tc.function.name === 'string'
+                    );
+
+                    if (validCalls.length === 0) {
+                        const { tool_calls, ...assistantNoTools } = msg;
+                        cleaned.push(assistantNoTools);
+                        continue;
+                    }
+
+                    cleaned.push({ ...msg, tool_calls: validCalls });
+                    for (const tc of validCalls) openToolCalls.add(tc.id);
+                    continue;
+                }
+
+                if (msg.role === 'tool') {
+                    if (!allowTools) continue;
+
+                    const callId = typeof msg.tool_call_id === 'string' ? msg.tool_call_id : '';
+                    if (!callId || !openToolCalls.has(callId)) {
+                        console.warn('[Payload] Dropping orphan tool message:', msg.tool_call_id);
+                        continue;
+                    }
+
+                    openToolCalls.delete(callId);
+                    cleaned.push(msg);
+                    continue;
+                }
+
+                cleaned.push(msg);
+            }
+
+            return cleaned;
+        };
 
         const executeTurn = async (currentPayload: any[], toolCallCount = 0, apiRetryCount = 0) => {
             if (toolCallCount === 0) {
@@ -247,8 +325,11 @@ export function ChatArea() {
             useAppStore.getState().addMessage({ id: assistantMsgId, role: 'assistant' as const, content: '', timestamp: Date.now() });
             setStreaming(true);
 
-            // Limit recursion: only provide tools if we haven't looped too many times
-            const tools = toolCallCount < 2 ? [{
+            const allowTools = toolCallCount < 2 && apiRetryCount < 2;
+            const requestPayload = sanitizePayloadForApi(currentPayload, allowTools);
+
+            // Limit recursion: only provide tools if we haven't looped too many times/retries
+            const tools = allowTools ? [{
                 type: 'function',
                 function: {
                     name: 'query_campaign_lore',
@@ -265,12 +346,15 @@ export function ChatArea() {
 
             await sendMessage(
                 provider,
-                currentPayload,
+                requestPayload,
                 (fullText) => updateLastAssistant(fullText),
-                async (toolCall) => {
+                async (finalText, toolCall) => {
                     if (toolCall && toolCall.name === 'query_campaign_lore') {
                         setIsCheckingNotes(true);
                         setStreaming(false);
+
+                        // We must ensure the assistant message in history is truly up to date
+                        updateLastAssistant(finalText);
 
                         // Save tool call block to assistant message
                         const { updateLastMessage } = useAppStore.getState();
@@ -284,7 +368,7 @@ export function ChatArea() {
 
                         currentPayload.push({
                             role: 'assistant',
-                            content: null,
+                            content: finalText || "",
                             tool_calls: [{ id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: toolCall.arguments } }]
                         } as unknown as import('../services/chatEngine').OpenAIMessage);
 
@@ -329,6 +413,7 @@ export function ChatArea() {
                     // Normal Completion
                     setStreaming(false);
                     setIsCheckingNotes(false);
+                    updateLastAssistant(finalText); // Final sync
                     const allMsgs = useAppStore.getState().messages;
                     const lastAssistant = allMsgs[allMsgs.length - 1];
                     if (lastAssistant?.role === 'assistant' && lastAssistant.content) {
@@ -480,13 +565,50 @@ export function ChatArea() {
         const campaignId = useAppStore.getState().activeCampaignId;
         if (!campaignId) return;
         try {
-            await fetch(`/api/campaigns/${campaignId}/archive`, {
+            const res = await fetch(`/api/campaigns/${campaignId}/archive`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userContent: userText, assistantContent: assistantText }),
             });
+            if (res.ok) {
+                const data = await res.json();
+                // Update archive index in store with the new entry appended
+                const idxRes = await fetch(`/api/campaigns/${campaignId}/archive/index`);
+                if (idxRes.ok) setArchiveIndex(await idxRes.json());
+                console.log(`[Archive] Appended scene #${data.sceneId}`);
+                return data.sceneId as string;
+            }
         } catch (err) {
             console.warn('[Archive] Failed to append:', err);
+        }
+        return undefined;
+    };
+
+    /**
+     * Find the earliest archive scene that corresponds to messages at or after
+     * `fromTimestamp`, then delete all scenes from that point forward.
+     */
+    const rollbackArchiveFrom = async (fromTimestamp: number) => {
+        const campaignId = useAppStore.getState().activeCampaignId;
+        if (!campaignId) return;
+        const currentIndex = useAppStore.getState().archiveIndex;
+        if (!currentIndex.length) return;
+
+        // Find the first scene whose timestamp >= fromTimestamp
+        const sorted = [...currentIndex].sort((a, b) => parseInt(a.sceneId) - parseInt(b.sceneId));
+        const target = sorted.find(e => e.timestamp >= fromTimestamp);
+        if (!target) return;
+
+        try {
+            await fetch(`/api/campaigns/${campaignId}/archive/scenes-from/${target.sceneId}`, {
+                method: 'DELETE'
+            });
+            // Refresh index in store
+            const idxRes = await fetch(`/api/campaigns/${campaignId}/archive/index`);
+            if (idxRes.ok) setArchiveIndex(await idxRes.json());
+            console.log(`[Archive] Rolled back from scene #${target.sceneId}`);
+        } catch (err) {
+            console.warn('[Archive] Rollback failed:', err);
         }
     };
 
@@ -500,6 +622,18 @@ export function ChatArea() {
             }
         } catch (err) {
             console.warn('[Archive] Failed to open:', err);
+        }
+    };
+    const handleClearArchive = async () => {
+        if (!activeCampaignId || !window.confirm('Are you sure you want to PERMANENTLY delete the entire archive? This cannot be undone.')) return;
+        try {
+            const res = await fetch(`/api/campaigns/${activeCampaignId}/archive`, { method: 'DELETE' });
+            if (res.ok) {
+                clearArchive();
+                console.log('[Archive] Cleared successfully');
+            }
+        } catch (err) {
+            console.warn('[Archive] Failed to clear:', err);
         }
     };
 
@@ -516,6 +650,8 @@ export function ChatArea() {
         if (!msg) return;
 
         if (msg.role === 'user') {
+            // Rollback archive to before this message's timestamp
+            rollbackArchiveFrom(msg.timestamp);
             useAppStore.getState().deleteMessagesFrom(msg.id);
             const textToResend = input.trim();
             setInput('');
@@ -541,8 +677,9 @@ export function ChatArea() {
         const lastUser = [...prevMsgs].reverse().find(m => m.role === 'user');
 
         if (lastUser) {
+            // Rollback archive: the scene for lastUser's exchange gets removed
+            rollbackArchiveFrom(lastUser.timestamp);
             deleteMessagesFrom(lastUser.id);
-            // Wait 50ms for the state deletion to propagate to Zustand store before passing it into handleSend's buildPayload
             setTimeout(() => {
                 handleSend(lastUser.displayContent || lastUser.content);
             }, 50);
@@ -581,9 +718,24 @@ export function ChatArea() {
                 )}
 
                 {messages.slice(-visibleCount).filter(msg => msg.role !== 'tool').map((msg) => {
-                    const markdownContent: string = typeof msg.displayContent === 'string'
+                    let markdownContent: string = typeof msg.displayContent === 'string'
                         ? msg.displayContent
                         : (typeof msg.content === 'string' ? msg.content : '');
+
+                    // Extract thinking block if present
+                    let thinkingBlock = '';
+                    const thinkMatch = markdownContent.match(/<think>([\s\S]*?)<\/think>/i);
+                    if (thinkMatch) {
+                        thinkingBlock = thinkMatch[1].trim();
+                        // Strip reasoning from main content if hidden, or just to handle it separately
+                        if (settings.showReasoning === false) {
+                            markdownContent = markdownContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+                        } else {
+                            // Even if shown, we might want to pull it out of the main markdown flow to style it
+                            markdownContent = markdownContent.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+                        }
+                    }
+
                     const parsedArgs = (msg as any).parsedArgs;
                     const hasSummary = msg.role === 'tool' && parsedArgs && Array.isArray(parsedArgs.summary);
                     const hasDebug = settings.debugMode === true && !!msg.debugPayload;
@@ -640,6 +792,17 @@ export function ChatArea() {
                                 </div>
 
                                 <div className="gm-prose">
+                                    {thinkingBlock && settings.showReasoning && (
+                                        <details className="mb-3 bg-void-darker border border-terminal/20 rounded overflow-hidden">
+                                            <summary className="cursor-pointer p-2 text-[10px] text-terminal/60 hover:text-terminal transition-colors select-none uppercase tracking-widest flex items-center gap-2 bg-terminal/5">
+                                                <Loader2 size={10} className={isStreaming && msg.id === messages[messages.length - 1].id ? "animate-spin" : ""} />
+                                                Cognitive Process
+                                            </summary>
+                                            <div className="p-3 text-[11px] text-text-dim/80 italic border-t border-terminal/10 max-h-[300px] overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                                                {thinkingBlock}
+                                            </div>
+                                        </details>
+                                    )}
                                     <ReactMarkdown>{markdownContent}</ReactMarkdown>
                                     {hasSummary && (
                                         <div className="mt-2 pl-3 border-l-2 border-terminal/30 text-[10px] text-text-dim">
@@ -709,6 +872,14 @@ export function ChatArea() {
                 >
                     <Scroll size={13} />
                     Archive
+                </button>
+                <button
+                    onClick={handleClearArchive}
+                    disabled={!activeCampaignId || archiveIndex.length === 0}
+                    className="flex items-center gap-1.5 bg-void border border-danger/30 hover:border-danger text-danger text-[10px] sm:text-[11px] uppercase tracking-wider px-2 sm:px-3 py-1.5 transition-all hover:bg-danger/5 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                    <Trash2 size={13} />
+                    Clear Archive
                 </button>
                 {
                     condenser.condensedSummary && (

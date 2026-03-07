@@ -27,6 +27,7 @@ export type AppSettings = {
     autoCondenseEnabled: boolean;
     debugMode?: boolean; // Toggles inline payload viewer
     theme?: 'light' | 'dark'; // UI theme
+    showReasoning?: boolean; // Toggles visibility of LLM thinking blocks
 
     // Legacy fields kept for migration only
     providers?: ProviderConfig[];
@@ -115,13 +116,30 @@ export type ChatMessage = {
     tool_call_id?: string;
 };
 
+/** @deprecated — replaced by ArchiveIndexEntry + ArchiveScene. Kept for backwards-compat migration. */
 export type ArchiveChunk = {
-    id: string;                   // unique ID (uid())
-    sceneRange: string;           // e.g. "SCENE 012–018" or scene ID from Header Index
-    timestamp: number;            // Date.now() when this chunk was created
-    summary: string;              // the condensed bullet-point text (from T3 promotion)
-    keywords: string[];           // extracted proper nouns for retrieval matching
-    tokens: number;               // estimated token count of summary field
+    id: string;
+    sceneRange: string;
+    timestamp: number;
+    summary: string;
+    keywords: string[];
+    tokens: number;
+};
+
+/** Search index entry — one per scene, auto-built by server on every turn. */
+export type ArchiveIndexEntry = {
+    sceneId: string;         // zero-padded, e.g. "014" — matches ## SCENE header in .archive.md
+    timestamp: number;
+    keywords: string[];      // proper nouns, quoted strings, [MEMORABLE:] tags
+    npcsMentioned: string[]; // NPC names detected in the scene
+    userSnippet: string;     // first ~100 chars of user message (human-readable preview)
+};
+
+/** Full verbatim scene content fetched from .archive.md for recall injection. */
+export type ArchiveScene = {
+    sceneId: string;
+    content: string;
+    tokens: number;
 };
 
 export type Campaign = {

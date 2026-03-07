@@ -285,6 +285,24 @@ export function SettingsModal() {
                             </button>
                         </div>
 
+                        {/* Show Reasoning */}
+                        <div className="flex items-center justify-between bg-void p-3 border border-border rounded">
+                            <div>
+                                <label className="block text-[11px] text-text-primary uppercase tracking-wider font-bold mb-1">
+                                    Show Reasoning (Thinking Blocks)
+                                </label>
+                                <p className="text-[9px] text-text-dim max-w-[200px] leading-tight">
+                                    Show or hide the model's internal thinking process (&lt;think&gt; blocks)
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => updateSettings({ showReasoning: !settings.showReasoning })}
+                                className={`relative w-10 h-5 rounded-full transition-colors focus:outline-none ${settings.showReasoning ? 'bg-terminal' : 'bg-border'}`}
+                            >
+                                <div className={`absolute top-[2px] w-4 h-4 rounded-full bg-surface transition-transform ${settings.showReasoning ? 'translate-x-[22px]' : 'translate-x-[2px]'}`} />
+                            </button>
+                        </div>
+
                         {/* Theme */}
                         <div className="flex items-center justify-between bg-void p-3 border border-border rounded">
                             <label className="text-[11px] text-text-primary uppercase tracking-wider font-bold">
