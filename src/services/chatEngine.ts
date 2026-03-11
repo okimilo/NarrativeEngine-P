@@ -1,6 +1,7 @@
 import type { AppSettings, ChatMessage, GameContext, LoreChunk, EndpointConfig, ProviderConfig, NPCEntry, ArchiveScene, PayloadTrace } from '../types';
 import { countTokens } from './tokenizer';
 import { formatQuestDigest } from './questTracker';
+import { buildBehaviorDirective, buildDriftAlert } from './npcBehaviorDirective';
 
 export type OpenAIMessage = {
     role: 'system' | 'user' | 'assistant' | 'tool';
@@ -148,7 +149,14 @@ export function buildPayload(
         });
 
         if (activeNPCs.length > 0) {
-            const npcText = `[ACTIVE NPC CONTEXT]\n${activeNPCs.map(npc => `[${npc.name.toUpperCase()}] Faction: ${npc.faction || '?'} | Goals: ${npc.goals || '?'} | Disp: ${npc.disposition || '?'}`).join('\n')}\n[END NPC CONTEXT]`;
+            const npcText = `[ACTIVE NPC CONTEXT]\n${activeNPCs.map(npc => {
+                let line = `[${npc.name.toUpperCase()}] Faction: ${npc.faction || '?'} | Goals: ${npc.goals || '?'} | Disp: ${npc.disposition || '?'}`;
+                const directive = buildBehaviorDirective(npc);
+                if (directive) line += `\n  ${directive}`;
+                const drift = buildDriftAlert(npc);
+                if (drift) line += `\n  ${drift}`;
+                return line;
+            }).join('\n')}\n[END NPC CONTEXT]`;
             worldBlocks.push({ source: 'Active NPCs', content: npcText, tokens: countTokens(npcText), reason: `NPCs detected in context (${activeNPCs.length})` });
         }
     }
@@ -677,6 +685,24 @@ RESPOND ONLY WITH VALID JSON.`;
                     if (targetNpc) {
                         // If AI provided visualProfile, ensure we get all fields, keeping defaults for missing ones
                         const changes = { ...update.changes };
+
+                        // Snapshot current axes before applying changes for drift detection
+                        const axisFields = ['nature', 'training', 'emotion', 'social', 'belief', 'ego', 'affinity'] as const;
+                        const hasAxisChange = axisFields.some(f => changes[f] !== undefined);
+
+                        if (hasAxisChange) {
+                            const previousAxes: Record<string, number> = {};
+                            for (const f of axisFields) {
+                                if (changes[f] !== undefined) {
+                                    previousAxes[f] = targetNpc[f] as number;
+                                }
+                            }
+                            changes.previousAxes = previousAxes;
+                            changes.shiftTurnCount = 0;
+                        } else if (targetNpc.shiftTurnCount !== undefined && targetNpc.shiftTurnCount < 3) {
+                            changes.shiftTurnCount = (targetNpc.shiftTurnCount || 0) + 1;
+                        }
+
                         if (changes.visualProfile && typeof changes.visualProfile === 'object') {
                             changes.visualProfile = {
                                 ...targetNpc.visualProfile, // fallback to existing (even if unknown)
