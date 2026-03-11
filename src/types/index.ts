@@ -271,6 +271,9 @@ export type NPCEntry = {
     ego: number;      // 1-10
     affinity: number; // 0-100
     portrait?: string; // Image path or base64
+    previousAxes?: { nature?: number; training?: number; emotion?: number; social?: number; belief?: number; ego?: number; affinity?: number; };
+    shiftNote?: string;
+    shiftTurnCount?: number;
 };
 
 
