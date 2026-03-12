@@ -1,6 +1,5 @@
 import type { AppSettings, ChatMessage, GameContext, LoreChunk, EndpointConfig, ProviderConfig, NPCEntry, ArchiveScene, PayloadTrace } from '../types';
 import { countTokens } from './tokenizer';
-import { formatQuestDigest } from './questTracker';
 import { buildBehaviorDirective, buildDriftAlert } from './npcBehaviorDirective';
 import { uid } from '../utils/uid';
 
@@ -176,10 +175,6 @@ export function buildPayload(
     const volatileParts: string[] = [];
     if (context.characterProfileActive && context.characterProfile) volatileParts.push(`[CHARACTER PROFILE]\n${context.characterProfile}`);
     if (context.inventoryActive && context.inventory) volatileParts.push(`[PLAYER INVENTORY]\n${context.inventory}`);
-    if (context.questLogActive && context.questLog?.length) {
-        const questDigest = formatQuestDigest(context.questLog);
-        if (questDigest) volatileParts.push(questDigest);
-    }
 
     const volatileContent = volatileParts.join('\n\n');
     const volatileTokens = countTokens(volatileContent);

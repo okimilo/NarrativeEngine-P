@@ -43,11 +43,10 @@ function buildCondenserPrompt(
         '1. Preserve ALL dice rolls, damage numbers, HP/MP changes exactly',
         '2. Preserve ALL item names, NPC names, location names EXACTLY as written',
         '3. Use the Canonical Terms below — DO NOT paraphrase, rename, or synonym-swap any proper nouns',
-        '4. Keep quest/objective updates',
-        '5. Drop flavour text and generic narration',
-        '6. EXCEPTION: Tag any memorable/dramatic moments (epic quotes, confessions, dramatic reveals, promises) with [MEMORABLE: "exact quote or moment"]. These survive future compression.',
-        '7. Output format: bullet points grouped by scene/event',
-        '8. Be extremely concise — aim for 70% compression',
+        '4. Drop flavour text and generic narration',
+        '5. EXCEPTION: Tag any memorable/dramatic moments (epic quotes, confessions, dramatic reveals, promises) with [MEMORABLE: "exact quote or moment"]. These survive future compression.',
+        '6. Output format: bullet points grouped by scene/event',
+        '7. Be extremely concise — aim for 70% compression',
     ];
 
     if (canonBlock) {
@@ -88,7 +87,7 @@ export async function condenseHistory(
     // --- Phase 4: T3 → T4 Promotion ---
     if (finalExistingSummary && countTokens(finalExistingSummary) > META_SUMMARY_THRESHOLD) {
         console.log('[Archive Memory] Promoting T3 summary to meta-summary...', { tokens: countTokens(finalExistingSummary) });
-        const metaPrompt = `You are a TTRPG session scribe. Compress the following older session summary into a highly condensed story-arc level summary (max 3 paragraphs). Preserve major character deaths, epic loot, unresolved plot hooks, and major quest completions.\n\nOLDER SUMMARY:\n${finalExistingSummary}`;
+        const metaPrompt = `You are a TTRPG session scribe. Compress the following older session summary into a highly condensed story-arc level summary (max 3 paragraphs). Preserve major character deaths, epic loot, and unresolved plot hooks.\n\nOLDER SUMMARY:\n${finalExistingSummary}`;
 
         console.log('[Condenser] Sending T3 meta-summary request...', { promptTokens: countTokens(metaPrompt) });
 
