@@ -8,6 +8,7 @@ import { runSaveFilePipeline } from '../services/saveFileEngine';
 import { runTurn } from '../services/turnOrchestrator';
 import { api } from '../services/apiClient';
 import { set } from 'idb-keyval';
+import { toast } from './Toast';
 
 
 export function ChatArea() {
@@ -101,6 +102,7 @@ export function ChatArea() {
             }
         } catch (err) {
             console.error('[Condenser]', err);
+            toast.error('Condenser failed — history was not compressed');
         } finally {
             setCondensing(false);
         }
@@ -194,8 +196,10 @@ export function ChatArea() {
                 set(`nn_campaign_${state.activeCampaignId}_npcs`, state.npcLedger);
             } catch (e) {
                 console.error("[Save] Failed to force save to IndexedDB:", e);
+                toast.error('Force save failed');
             }
         }
+        toast.success('Campaign saved');
         setTimeout(() => setIsSaving(false), 2000);
     };
 
@@ -223,6 +227,7 @@ export function ChatArea() {
             console.log(`[Archive] Rolled back from scene #${target.sceneId}`);
         } catch (err) {
             console.warn('[Archive] Rollback failed:', err);
+            toast.warning('Archive rollback failed');
         }
     };
 
@@ -239,6 +244,7 @@ export function ChatArea() {
             console.log('[Archive] Cleared successfully');
         } catch (err) {
             console.warn('[Archive] Failed to clear:', err);
+            toast.error('Failed to clear archive');
         }
     };
 
@@ -365,7 +371,7 @@ export function ChatArea() {
                     return (
                         <div
                             key={msg.id}
-                            className={`group flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                            className={`group flex animate-[msg-in_0.2s_ease-out] ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                         >
                             <div
                                 className={`max-w-[95%] md:max-w-[75%] px-3 md:px-4 py-2 md:py-3 text-sm font-mono leading-relaxed relative ${msg.role === 'user'
@@ -453,17 +459,19 @@ export function ChatArea() {
                     );
                 })}
 
-                {isCheckingNotes ? (
-                    <div className="flex items-center gap-2 text-terminal/80 text-xs px-4">
-                        <Loader2 size={12} className="animate-spin" />
-                        <span className="animate-pulse-slow">The GM is checking their notes...</span>
-                    </div>
-                ) : isStreaming && (
-                    <div className="flex items-center gap-2 text-terminal text-xs px-4">
-                        <Loader2 size={12} className="animate-spin" />
-                        <span className="animate-pulse-slow">Generating...</span>
-                    </div>
-                )}
+                <div aria-live="polite" aria-atomic="true">
+                    {isCheckingNotes ? (
+                        <div className="flex items-center gap-2 text-terminal/80 text-xs px-4">
+                            <Loader2 size={12} className="animate-spin" />
+                            <span className="animate-pulse-slow">The GM is checking their notes...</span>
+                        </div>
+                    ) : isStreaming ? (
+                        <div className="flex items-center gap-2 text-terminal text-xs px-4">
+                            <Loader2 size={12} className="animate-spin" />
+                            <span className="animate-pulse-slow">Generating...</span>
+                        </div>
+                    ) : null}
+                </div>
 
                 <div ref={bottomRef} />
             </div>

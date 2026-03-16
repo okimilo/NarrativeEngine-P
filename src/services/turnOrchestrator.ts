@@ -8,6 +8,7 @@ import { recallArchiveScenes } from './archiveMemory';
 import { rollEngines, rollDiceFairness } from './engineRolls';
 import { extractNPCNames, classifyNPCNames, validateNPCCandidates } from './npcDetector';
 import { api } from './apiClient';
+import { toast } from '../components/Toast';
 
 export type TurnCallbacks = {
     onCheckingNotes: (checking: boolean) => void;
@@ -176,6 +177,7 @@ export async function runTurn(
             console.log(`[Archive] Reloaded index: ${freshIndex.length} entries`);
         } catch (err) {
             console.error('[Condenser]', err);
+            toast.error('Auto-condense failed');
         } finally {
             callbacks.setCondensing(false);
         }
@@ -319,12 +321,15 @@ export async function runTurn(
             (err) => {
                 if (apiRetryCount === 0) {
                     callbacks.updateLastAssistant(`⚠️ Error: ${err}. Retrying...`);
+                    toast.warning('LLM request failed — retrying...');
                     setTimeout(() => executeTurn(currentPayload, toolCallCount, 1), 2000);
                 } else if (apiRetryCount === 1) {
                     callbacks.updateLastAssistant(`⚠️ Error: ${err}. Retrying without tools...`);
+                    toast.warning('Retry failed — trying without tools...');
                     setTimeout(() => executeTurn(currentPayload, 999, 2), 2000);
                 } else {
                     callbacks.updateLastAssistant(`⚠️ Error: ${err}`);
+                    toast.error('LLM request failed after retries');
                     callbacks.setStreaming(false);
                     callbacks.onCheckingNotes(false);
                 }

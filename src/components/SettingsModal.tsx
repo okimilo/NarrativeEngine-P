@@ -3,6 +3,7 @@ import { X, Loader2, CheckCircle, XCircle, Plus, Trash2, ChevronDown, ChevronRig
 import { useAppStore } from '../store/useAppStore';
 import { testConnection } from '../services/chatEngine';
 import type { AIPreset, EndpointConfig } from '../types';
+import { toast } from './Toast';
 
 function uid(): string {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -34,6 +35,11 @@ export function SettingsModal() {
         const result = await testConnection(config);
         setTestResults(prev => ({ ...prev, [section]: result }));
         setTestingSection(null);
+        if (result.ok) {
+            toast.success(`${section} connection successful`);
+        } else {
+            toast.error(`${section} connection failed: ${result.detail}`);
+        }
     };
 
     const handleAddPreset = () => {
@@ -144,7 +150,7 @@ export function SettingsModal() {
     };
 
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Settings">
             {/* Backdrop */}
             <div className="absolute inset-0 bg-ember/40 backdrop-blur-sm" onClick={toggleSettings} />
 

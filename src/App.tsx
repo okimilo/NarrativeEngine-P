@@ -7,6 +7,8 @@ import { ContextDrawer } from './components/ContextDrawer';
 import { ChatArea } from './components/ChatArea';
 import { SettingsModal } from './components/SettingsModal';
 import { NPCLedgerModal } from './components/NPCLedgerModal';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { ToastContainer } from './components/Toast';
 import {
   loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex,
 } from './store/campaignStore';
@@ -78,15 +80,16 @@ export default function App() {
 
   if (!activeCampaignId) {
     return (
-      <>
+      <ErrorBoundary>
         <CampaignHub />
         <SettingsModal />
-      </>
+        <ToastContainer />
+      </ErrorBoundary>
     );
   }
 
   return (
-    <>
+    <ErrorBoundary>
       <Header />
       <div className="flex flex-1 overflow-hidden">
         <ContextDrawer />
@@ -94,6 +97,7 @@ export default function App() {
       </div>
       <SettingsModal />
       <NPCLedgerModal />
-    </>
+      <ToastContainer />
+    </ErrorBoundary>
   );
 }

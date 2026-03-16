@@ -31,6 +31,7 @@ export function Header() {
                 onClick={toggleDrawer}
                 className="text-text-dim hover:text-terminal transition-colors p-1"
                 title={drawerOpen ? 'Close context drawer' : 'Open context drawer'}
+                aria-label={drawerOpen ? 'Close context drawer' : 'Open context drawer'}
             >
                 {drawerOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
             </button>
@@ -47,6 +48,7 @@ export function Header() {
                 onClick={clearChat}
                 className="text-text-dim hover:text-danger transition-colors p-1"
                 title="Clear chat history"
+                aria-label="Clear chat history"
             >
                 <Trash2 size={16} />
             </button>
@@ -55,6 +57,7 @@ export function Header() {
                 onClick={toggleNPCLedger}
                 className="text-text-dim hover:text-terminal transition-colors p-1"
                 title="NPC Ledger"
+                aria-label="Open NPC Ledger"
             >
                 <Users size={18} />
             </button>
@@ -63,6 +66,7 @@ export function Header() {
                 onClick={toggleSettings}
                 className="text-text-dim hover:text-terminal transition-colors p-1"
                 title="Settings"
+                aria-label="Open settings"
             >
                 <Settings size={18} />
             </button>
@@ -71,6 +75,7 @@ export function Header() {
                 onClick={handleExit}
                 className="text-text-dim hover:text-ember transition-colors p-1 ml-1"
                 title="Exit campaign"
+                aria-label="Exit campaign"
             >
                 <LogOut size={16} />
             </button>
