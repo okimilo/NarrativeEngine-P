@@ -24,4 +24,7 @@ data
 *.sln
 *.sw?
 .claude/
-.claude/
+
+# Repomix / codebase export files
+repomix-output.xml
+*.docx
