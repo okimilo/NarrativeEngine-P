@@ -11,6 +11,9 @@ export type AIPreset = {
     imageAI: EndpointConfig;
     summarizerAI: EndpointConfig;
     utilityAI?: EndpointConfig; // Context recommender — optional, fallback to substring scan if empty
+    enemyAI?: EndpointConfig;
+    neutralAI?: EndpointConfig;
+    allyAI?: EndpointConfig;
 };
 
 export type ProviderConfig = {
@@ -108,6 +111,19 @@ export type GameContext = {
     sceneNoteDepth: number;
     surpriseConfig?: SurpriseConfig;
     encounterConfig?: EncounterConfig;
+    // --- AI Players (Enemy, Neutral, Ally) ---
+    worldVibe: string; // Global genre constraints (e.g. "Low fantasy, no magic")
+    enemyPlayerActive: boolean;
+    neutralPlayerActive: boolean;
+    allyPlayerActive: boolean;
+    enemyPlayerPrompt: string;
+    neutralPlayerPrompt: string;
+    allyPlayerPrompt: string;
+    interventionChance: number; // 0-100%
+    enemyCooldown: number;
+    neutralCooldown: number;
+    allyCooldown: number;
+    interventionQueue: ('enemy' | 'neutral' | 'ally')[];
 };
 
 export type ChatMessage = {
