@@ -1,4 +1,4 @@
-import type { AppSettings, GameContext, ChatMessage, NPCEntry, LoreChunk, CondenserState, ArchiveIndexEntry, EndpointConfig, ProviderConfig } from '../types';
+import type { AppSettings, GameContext, ChatMessage, NPCEntry, LoreChunk, CondenserState, ArchiveIndexEntry, ArchiveScene, EndpointConfig, ProviderConfig } from '../types';
 import { uid } from '../utils/uid';
 import { buildPayload, sendMessage, generateNPCProfile, updateExistingNPCs } from './chatEngine';
 import { shouldCondense, condenseHistory } from './condenser';
@@ -123,54 +123,51 @@ export async function runTurn(
         timestamp: Date.now() 
     });
     callbacks.setStreaming(true);
-    callbacks.setLoadingStatus?.('[1/5] Extracting Lore & Stats...');
+    callbacks.setLoadingStatus?.('Gathering Context & Memories concurrently...');
 
+    // Synchronous lore extraction (non-blocking)
     const relevantLore = loreChunks.length > 0
         ? retrieveRelevantLore(loreChunks, context.canonState, context.headerIndex, input, 1200, messages)
         : undefined;
 
+    // Prepare parallel promises
     let sceneNumber: string | undefined;
-    if (activeCampaignId) {
-        callbacks.setLoadingStatus?.('[2/5] Fetching Timeline...');
-        try {
-            const snRes = await fetch(`/api/campaigns/${activeCampaignId}/archive/next-scene`);
-            if (snRes.ok) {
-                const snData = await snRes.json();
+    let archiveRecall: ArchiveScene[] | undefined;
+    let recommendedNPCNames: string[] | undefined;
+
+    const timelinePromise = activeCampaignId ? fetch(`/api/campaigns/${activeCampaignId}/archive/next-scene`)
+        .then(async res => {
+            if (res.ok) {
+                const snData = await res.json();
                 sceneNumber = snData.sceneId; 
                 console.log(`[Scene Engine] Pre-assigned scene #${sceneNumber}`);
             }
-        } catch { /* ignored */ }
-    }
+        }).catch(() => { /* ignored */ }) : Promise.resolve();
 
-    callbacks.setLoadingStatus?.('[3/5] Recalling Archive Memory...');
-    const archiveRecall = (archiveIndex.length > 0 && activeCampaignId)
-        ? await recallArchiveScenes(activeCampaignId, archiveIndex, input, messages, 3000)
-        : undefined;
-
-    // ── Utility AI Context Recommender ──
-    // If a utilityAI endpoint is configured, ask it which NPCs/lore are relevant.
-    // On any failure, fall back silently to substring matching (recommendedNPCNames stays undefined).
-    let recommendedNPCNames: string[] | undefined;
+    const archivePromise = (archiveIndex.length > 0 && activeCampaignId)
+        ? recallArchiveScenes(activeCampaignId, archiveIndex, input, messages, 3000)
+            .then(res => archiveRecall = res)
+            .catch(() => { /* ignored */ }) 
+        : Promise.resolve();
 
     const utilityEndpoint = state.getUtilityEndpoint?.();
-    if (utilityEndpoint?.endpoint) {
-        callbacks.setLoadingStatus?.('[4/5] Consulting AI Recommender...');
-        try {
-            const result = await recommendContext(
-                utilityEndpoint,
-                npcLedger,
-                loreChunks,
-                messages,
-                finalInput
-            );
-            recommendedNPCNames = result.relevantNPCNames;
-            console.log(`[TurnOrchestrator] Recommender returned: ${recommendedNPCNames.length} NPCs, ${result.relevantLoreIds.length} lore`);
-        } catch (err) {
-            console.warn('[TurnOrchestrator] UtilityAI recommender failed, falling back to substring scan:', err);
-        }
-    }
+    const recommenderPromise = utilityEndpoint?.endpoint ? recommendContext(
+        utilityEndpoint,
+        npcLedger,
+        loreChunks,
+        messages,
+        finalInput
+    ).then(result => {
+        recommendedNPCNames = result.relevantNPCNames;
+        console.log(`[TurnOrchestrator] Recommender returned: ${recommendedNPCNames.length} NPCs, ${result.relevantLoreIds.length} lore`);
+    }).catch(err => {
+        console.warn('[TurnOrchestrator] UtilityAI recommender failed:', err);
+    }) : Promise.resolve();
 
-    callbacks.setLoadingStatus?.('[5/5] Architecting AI Prompt...');
+    // Await all async operations simultaneously
+    await Promise.all([timelinePromise, archivePromise, recommenderPromise]);
+
+    callbacks.setLoadingStatus?.('Architecting AI Prompt...');
     const payloadResult = buildPayload(
         settings,
         context,
@@ -364,6 +361,12 @@ export async function runTurn(
                 }
             },
             (err) => {
+                if (err === 'AbortError' || err === 'The user aborted a request.') {
+                    callbacks.setStreaming(false);
+                    callbacks.onCheckingNotes(false);
+                    callbacks.setLoadingStatus?.(null);
+                    return;
+                }
                 if (apiRetryCount === 0) {
                     callbacks.updateLastAssistant(`⚠️ Error: ${err}. Retrying...`);
                     toast.warning('LLM request failed — retrying...');

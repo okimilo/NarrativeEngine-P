@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Save, Loader2, Zap, Scroll, Edit2, RotateCcw, Trash2, Check, X, Square } from 'lucide-react';
+import { Send, Save, Loader2, Zap, Scroll, Edit2, RotateCcw, Trash2, Check, X, Square, FileText, ChevronDown, ChevronUp, RotateCw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { useAppStore } from '../store/useAppStore';
 import type { ChatMessage, EndpointConfig, ProviderConfig } from '../types';
@@ -29,14 +29,19 @@ export function ChatArea() {
         activeCampaignId,
         deleteMessage,
         deleteMessagesFrom,
+        resetCondenser,
     } = useAppStore();
 
     const [input, setInput] = useState('');
     const [isStreaming, setStreaming] = useState(false); // Moved from store to local state
     const [isCheckingNotes, setIsCheckingNotes] = useState(false);
     const [loadingStatus, setLoadingStatus] = useState<string | null>(null);
-    const [visibleCount, setVisibleCount] = useState(20);
+    const [visibleCount, setVisibleCount] = useState(10);
+    const [loadStep, setLoadStep] = useState(10);
     const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+    const [showCondensed, setShowCondensed] = useState(false);
+    const [isEditingCondensed, setIsEditingCondensed] = useState(false);
+    const [condensedDraft, setCondensedDraft] = useState('');
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
@@ -155,7 +160,7 @@ export function ChatArea() {
             settings,
             context,
             messages: useAppStore.getState().messages,
-            condenser,
+            condenser: useAppStore.getState().condenser,
             loreChunks,
             npcLedger,
             archiveIndex,
@@ -354,7 +359,11 @@ export function ChatArea() {
                 {messages.length > visibleCount && (
                     <div className="flex justify-center py-2">
                         <button
-                            onClick={() => setVisibleCount(prev => prev + 20)}
+                            onClick={() => setVisibleCount(prev => {
+                                const next = prev + loadStep;
+                                setLoadStep(s => s + 20);
+                                return next;
+                            })}
                             className="text-xs text-terminal/70 hover:text-terminal bg-terminal/10 hover:bg-terminal/20 px-4 py-2 rounded transition-colors"
                         >
                             ↑ Load older messages... ({messages.length - visibleCount} hidden)
@@ -533,14 +542,112 @@ export function ChatArea() {
                     <Trash2 size={13} />
                     Clear Archive
                 </button>
-                {
-                    condenser.condensedSummary && (
-                        <span className="text-[9px] text-terminal/60 self-center ml-1">
-                            ● condensed
-                        </span>
-                    )
-                }
+                {condenser.condensedSummary && (
+                    <button
+                        onClick={() => setShowCondensed(prev => !prev)}
+                        className="flex items-center gap-1.5 bg-void border border-amber-500/30 hover:border-amber-500 text-amber-500 text-[10px] sm:text-[11px] uppercase tracking-wider px-2 sm:px-3 py-1.5 transition-all hover:bg-amber-500/5"
+                        title="View / Edit condensed summary"
+                    >
+                        <FileText size={13} />
+                        Memory
+                        {showCondensed ? <ChevronUp size={11} /> : <ChevronDown size={11} />}
+                    </button>
+                )}
             </div>
+
+            {/* Condensed Summary Panel — Expandable & Editable */}
+            {showCondensed && condenser.condensedSummary && (
+                <div className="mx-2 md:mx-4 mb-1 border border-amber-500/30 bg-amber-500/5 rounded-sm overflow-hidden animate-[msg-in_0.15s_ease-out]">
+                    <div className="flex items-center justify-between px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20">
+                        <div className="flex items-center gap-2">
+                            <FileText size={12} className="text-amber-500" />
+                            <span className="text-[10px] text-amber-500 uppercase tracking-widest font-bold">Condensed Memory</span>
+                            <span className="text-[9px] text-text-dim">(up to msg #{condenser.condensedUpToIndex})</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                            {!isEditingCondensed ? (
+                                <>
+                                    <button
+                                        onClick={() => {
+                                            setCondensedDraft(condenser.condensedSummary);
+                                            setIsEditingCondensed(true);
+                                        }}
+                                        className="text-text-dim hover:text-amber-500 p-1 bg-void-lighter rounded transition-colors"
+                                        title="Edit summary (retcon)"
+                                    >
+                                        <Edit2 size={11} />
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if (window.confirm('Reset condensed memory? This will clear the summary and re-include all messages in context. Cannot be undone.')) {
+                                                resetCondenser();
+                                                setShowCondensed(false);
+                                                toast.info('Condensed memory cleared — full history restored to context');
+                                            }
+                                        }}
+                                        className="text-text-dim hover:text-danger p-1 bg-void-lighter rounded transition-colors"
+                                        title="Reset condensed memory entirely"
+                                    >
+                                        <RotateCw size={11} />
+                                    </button>
+                                </>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={() => {
+                                            setCondensed(condensedDraft, condenser.condensedUpToIndex);
+                                            setIsEditingCondensed(false);
+                                            toast.success('Condensed memory updated');
+                                        }}
+                                        className="text-text-dim hover:text-emerald-500 p-1 bg-void-lighter rounded transition-colors"
+                                        title="Save edits (keep raw history)"
+                                    >
+                                        <Check size={11} />
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            if (window.confirm('RETCON: This will override ALL raw conversation history. Only your edited summary + your next message will be sent to the AI. Use this to rewrite scenes.')) {
+                                                const currentMessages = useAppStore.getState().messages;
+                                                setCondensed(condensedDraft, currentMessages.length - 1);
+                                                setIsEditingCondensed(false);
+                                                toast.success(`Retcon applied — all ${currentMessages.length} messages now behind summary boundary`);
+                                            }
+                                        }}
+                                        className="text-text-dim hover:text-amber-500 p-1 bg-void-lighter rounded transition-colors"
+                                        title="RETCON: Save edits & override all raw history — AI will only see this summary"
+                                    >
+                                        <RotateCcw size={11} />
+                                    </button>
+                                    <button
+                                        onClick={() => {
+                                            setIsEditingCondensed(false);
+                                            setCondensedDraft('');
+                                        }}
+                                        className="text-text-dim hover:text-danger p-1 bg-void-lighter rounded transition-colors"
+                                        title="Cancel edits"
+                                    >
+                                        <X size={11} />
+                                    </button>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                    <div className="p-3 max-h-[250px] overflow-y-auto">
+                        {isEditingCondensed ? (
+                            <textarea
+                                value={condensedDraft}
+                                onChange={(e) => setCondensedDraft(e.target.value)}
+                                className="w-full bg-void border border-amber-500/30 focus:border-amber-500 text-text-primary text-[11px] font-mono leading-relaxed p-2 resize-y min-h-[120px] max-h-[400px] outline-none rounded-sm transition-colors"
+                                placeholder="Edit condensed memory..."
+                            />
+                        ) : (
+                            <div className="text-[11px] text-text-primary/80 font-mono leading-relaxed whitespace-pre-wrap">
+                                {condenser.condensedSummary}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
 
             {/* Input Area */}
             <div className="flex-shrink-0 bg-void border-t border-border">

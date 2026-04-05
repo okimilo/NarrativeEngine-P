@@ -40,7 +40,11 @@ export const createChatSlice: StateCreator<ChatDeps, [], [], ChatSlice> = (set) 
         isCondensing: false,
     },
     setCondensed: (summary, upToIndex) =>
-        set((s) => ({ condenser: { ...s.condenser, condensedSummary: summary, condensedUpToIndex: upToIndex } })),
+        set((s) => {
+            const newCondenser = { ...s.condenser, condensedSummary: summary, condensedUpToIndex: upToIndex };
+            debouncedSaveCampaignState(s.activeCampaignId, { context: s.context, messages: s.messages, condenser: newCondenser });
+            return { condenser: newCondenser };
+        }),
     setCondensing: (v) =>
         set((s) => ({ condenser: { ...s.condenser, isCondensing: v } })),
     resetCondenser: () =>
