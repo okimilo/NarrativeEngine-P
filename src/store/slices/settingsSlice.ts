@@ -4,6 +4,7 @@ import { get as idbGet, set as idbSet } from 'idb-keyval';
 import { encryptSettingsPresets, decryptSettingsPresets } from '../../services/settingsCrypto';
 import { uid } from '../../utils/uid';
 import { toast } from '../../components/Toast';
+import { api } from '../../services/apiClient';
 
 const API = '/api';
 
@@ -78,7 +79,6 @@ export const defaultSettings: AppSettings = {
     presets: [defaultPreset],
     activePresetId: defaultPreset.id,
     contextLimit: 4096,
-    autoCondenseEnabled: true,
     debugMode: false,
     theme: 'light',
     showReasoning: true,
@@ -98,7 +98,6 @@ export function migrateSettings(data: Record<string, unknown>): AppSettings {
             presets: raw.presets as AIPreset[],
             activePresetId: (raw.activePresetId as string) || (raw.presets as AIPreset[])[0].id,
             contextLimit: (raw.contextLimit as number) ?? 4096,
-            autoCondenseEnabled: (raw.autoCondenseEnabled as boolean) ?? true,
             debugMode: (raw.debugMode as boolean) ?? false,
             theme: (raw.theme as 'light' | 'dark') ?? 'light',
             showReasoning: (raw.showReasoning as boolean) ?? true,
@@ -141,7 +140,6 @@ export function migrateSettings(data: Record<string, unknown>): AppSettings {
         presets: [migratedPreset],
         activePresetId: legacyId,
         contextLimit: (raw.contextLimit as number) ?? 4096,
-        autoCondenseEnabled: (raw.autoCondenseEnabled as boolean) ?? true,
         debugMode: (raw.debugMode as boolean) ?? false,
         theme: (raw.theme as 'light' | 'dark') ?? 'light',
         showReasoning: (raw.showReasoning as boolean) ?? true,
@@ -174,6 +172,18 @@ export type SettingsSlice = {
     settingsLoaded: boolean;
     updateSettings: (patch: Partial<AppSettings>) => void;
     loadSettings: () => Promise<void>;
+
+    // Vault state
+    vaultStatus: { exists: boolean; unlocked: boolean; hasRemember: boolean } | null;
+    vaultLoading: boolean;
+    checkVaultStatus: () => Promise<void>;
+    setupVault: (password: string | null, remember: boolean) => Promise<boolean>;
+    unlockVault: (password: string, remember: boolean) => Promise<boolean>;
+    unlockVaultWithRemembered: () => Promise<boolean>;
+    lockVault: () => Promise<void>;
+    saveVaultKeys: () => Promise<void>;
+    exportVault: (password: string) => Promise<Blob>;
+    importVault: (file: string, password: string, merge: boolean) => Promise<void>;
 
     addPreset: (preset: AIPreset) => void;
     updatePreset: (id: string, patch: Partial<AIPreset>) => void;
@@ -303,5 +313,127 @@ export const createSettingsSlice: StateCreator<SettingsSlice & { activeCampaignI
     getActiveUtilityEndpoint: () => {
         const preset = get().getActivePreset();
         return preset?.utilityAI;
+    },
+
+    // ── Vault methods ──────────────────────────────────────────────────────
+
+    vaultStatus: null,
+    vaultLoading: false,
+
+    checkVaultStatus: async () => {
+        try {
+            const status = await api.vault.status();
+            set({ vaultStatus: status });
+        } catch (e) {
+            console.error('[Vault] Failed to check status:', e);
+            set({ vaultStatus: { exists: false, unlocked: false, hasRemember: false } });
+        }
+    },
+
+    setupVault: async (password, remember) => {
+        set({ vaultLoading: true });
+        try {
+            const presets = get().settings.presets;
+            await api.vault.setup(password, presets);
+            set({ vaultStatus: { exists: true, unlocked: true, hasRemember: remember } });
+            toast.success(password ? 'Secure vault created' : 'Machine-only vault created');
+            return true;
+        } catch (e) {
+            console.error('[Vault] Setup failed:', e);
+            toast.error('Failed to create vault');
+            return false;
+        } finally {
+            set({ vaultLoading: false });
+        }
+    },
+
+    unlockVault: async (password, remember) => {
+        set({ vaultLoading: true });
+        try {
+            await api.vault.unlock(password, remember);
+            const data = await api.vault.getKeys();
+            // Merge vault presets into settings
+            if (data.presets && data.presets.length > 0) {
+                set((s) => ({
+                    settings: { ...s.settings, presets: data.presets }
+                }));
+            }
+            set({ vaultStatus: { exists: true, unlocked: true, hasRemember: remember } });
+            toast.success('Vault unlocked');
+            return true;
+        } catch (e) {
+            console.error('[Vault] Unlock failed:', e);
+            return false;
+        } finally {
+            set({ vaultLoading: false });
+        }
+    },
+
+    unlockVaultWithRemembered: async () => {
+        set({ vaultLoading: true });
+        try {
+            await api.vault.unlockWithRemembered();
+            const data = await api.vault.getKeys();
+            if (data.presets && data.presets.length > 0) {
+                set((s) => ({
+                    settings: { ...s.settings, presets: data.presets }
+                }));
+            }
+            set({ vaultStatus: { exists: true, unlocked: true, hasRemember: true } });
+            return true;
+        } catch (e) {
+            console.error('[Vault] Remembered unlock failed:', e);
+            set({ vaultStatus: { exists: true, unlocked: false, hasRemember: false } });
+            return false;
+        } finally {
+            set({ vaultLoading: false });
+        }
+    },
+
+    lockVault: async () => {
+        try {
+            await api.vault.lock();
+            set({ vaultStatus: { exists: true, unlocked: false, hasRemember: false } });
+            toast.success('Vault locked');
+        } catch (e) {
+            console.error('[Vault] Lock failed:', e);
+        }
+    },
+
+    saveVaultKeys: async () => {
+        try {
+            const presets = get().settings.presets;
+            await api.vault.saveKeys({ presets });
+        } catch (e) {
+            console.error('[Vault] Save failed:', e);
+            toast.error('Failed to save keys to vault');
+        }
+    },
+
+    exportVault: async (password) => {
+        try {
+            const blob = await api.vault.export(password);
+            return blob;
+        } catch (e) {
+            console.error('[Vault] Export failed:', e);
+            throw e;
+        }
+    },
+
+    importVault: async (file, password, merge) => {
+        try {
+            await api.vault.import(file, password, merge);
+            const data = await api.vault.getKeys();
+            if (data.presets && data.presets.length > 0) {
+                set((s) => ({
+                    settings: { ...s.settings, presets: data.presets }
+                }));
+            }
+            toast.success('Vault imported successfully');
+        } catch (e) {
+            console.error('[Vault] Import failed:', e);
+            toast.error('Failed to import vault - wrong password?');
+            throw e;
+        }
     },
 });

@@ -194,4 +194,72 @@ export const api = {
             return res.ok;
         },
     },
+    vault: {
+        async status(): Promise<{ exists: boolean; unlocked: boolean; hasRemember: boolean }> {
+            const res = await fetch(`${API}/vault/status`);
+            if (!res.ok) throw new Error('Failed to get vault status');
+            return await res.json();
+        },
+        async setup(password: string | null, presets: any[]): Promise<void> {
+            const res = await fetch(`${API}/vault/setup`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password, presets }),
+            });
+            if (!res.ok) throw new Error('Failed to create vault');
+        },
+        async unlock(password: string, remember: boolean): Promise<void> {
+            const res = await fetch(`${API}/vault/unlock`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password, remember }),
+            });
+            if (!res.ok) throw new Error('Invalid password');
+        },
+        async unlockWithRemembered(): Promise<void> {
+            const res = await fetch(`${API}/vault/unlock-remembered`, {
+                method: 'POST',
+            });
+            if (!res.ok) throw new Error('Failed to unlock with remembered key');
+        },
+        async lock(): Promise<void> {
+            await fetch(`${API}/vault/lock`, { method: 'POST' });
+        },
+        async getKeys(): Promise<{ presets: any[] }> {
+            const res = await fetch(`${API}/vault/keys`);
+            if (!res.ok) throw new Error('Vault is locked');
+            return await res.json();
+        },
+        async saveKeys(data: { presets: any[] }): Promise<void> {
+            const res = await fetch(`${API}/vault/keys`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(data),
+            });
+            if (!res.ok) throw new Error('Failed to save keys');
+        },
+        async export(password: string): Promise<Blob> {
+            const res = await fetch(`${API}/vault/export`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password }),
+            });
+            if (!res.ok) throw new Error('Failed to export vault');
+            return await res.blob();
+        },
+        async import(file: string, password: string, merge: boolean = true): Promise<void> {
+            const res = await fetch(`${API}/vault/import`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ file, password, merge }),
+            });
+            if (!res.ok) throw new Error('Failed to import vault');
+        },
+        async clearRemembered(): Promise<void> {
+            await fetch(`${API}/vault/remember`, { method: 'DELETE' });
+        },
+        async delete(): Promise<void> {
+            await fetch(`${API}/vault`, { method: 'DELETE' });
+        },
+    },
 };

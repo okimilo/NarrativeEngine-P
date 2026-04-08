@@ -3,8 +3,9 @@ import type { ChatMessage, GameContext, EndpointConfig, ProviderConfig } from '.
 import { countTokens } from './tokenizer';
 
 const VERBATIM_WINDOW = 8;
-const CONDENSE_BUDGET_RATIO = 0.75;
+const CONDENSE_BUDGET_RATIO = 0.85;
 const META_SUMMARY_THRESHOLD = 6000;
+const MIN_CANDIDATE_MESSAGES = 3; // minimum new messages beyond verbatim window to justify a condense pass
 
 export function shouldCondense(
     messages: ChatMessage[],
@@ -76,7 +77,7 @@ export async function condenseHistory(
     const uncondensed = messages.slice(condensedUpToIndex + 1);
     const candidateToCondense = uncondensed.slice(0, -VERBATIM_WINDOW);
 
-    if (candidateToCondense.length === 0) {
+    if (candidateToCondense.length < MIN_CANDIDATE_MESSAGES) {
         return { summary: existingSummary, upToIndex: condensedUpToIndex };
     }
 

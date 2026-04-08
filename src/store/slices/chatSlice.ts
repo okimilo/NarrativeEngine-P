@@ -44,7 +44,9 @@ export const createChatSlice: StateCreator<ChatDeps, [], [], ChatSlice> = (set) 
     },
     setCondensed: (summary, upToIndex) =>
         set((s) => {
-            const newCondenser = { ...s.condenser, condensedSummary: summary, condensedUpToIndex: upToIndex };
+            // Guard: never overwrite a real summary with empty string
+            const safeSummary = summary || s.condenser.condensedSummary;
+            const newCondenser = { ...s.condenser, condensedSummary: safeSummary, condensedUpToIndex: upToIndex };
             debouncedSaveCampaignState();
             return { condenser: newCondenser };
         }),

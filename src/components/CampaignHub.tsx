@@ -32,7 +32,6 @@ const DEFAULT_CONTEXT = {
     interventionChance: 25, enemyCooldown: 2, neutralCooldown: 2, allyCooldown: 2,
     interventionQueue: [] as ('enemy' | 'neutral' | 'ally')[],
     worldEventConfig: { initialDC: 498, dcReduction: 2, who: [] as string[], where: [] as string[], why: [] as string[], what: [] as string[] },
-    coreMemorySlots: [],
 };
 
 const DEFAULT_CONDENSER = { condensedSummary: '', condensedUpToIndex: -1, isCondensing: false };

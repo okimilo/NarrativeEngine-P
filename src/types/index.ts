@@ -28,7 +28,6 @@ export type AppSettings = {
     presets: AIPreset[];
     activePresetId: string;
     contextLimit: number;
-    autoCondenseEnabled: boolean;
     debugMode?: boolean; // Toggles inline payload viewer
     theme?: 'light' | 'dark'; // UI theme
     showReasoning?: boolean; // Toggles visibility of LLM thinking blocks
@@ -124,7 +123,6 @@ export type GameContext = {
     neutralCooldown: number;
     allyCooldown: number;
     interventionQueue: ('enemy' | 'neutral' | 'ally')[];
-    coreMemorySlots?: CoreMemorySlot[];
 };
 
 export type ChatMessage = {
@@ -282,13 +280,6 @@ export type PayloadTrace = {
     preview?: string;
     included: boolean;
     position?: string;
-};
-
-export type CoreMemorySlot = {
-    key: string;
-    value: string;
-    priority: number;
-    sceneId: string;
 };
 
 export type SemanticFact = {

@@ -1,8 +1,6 @@
 import type { AppSettings, GameContext, ChatMessage, NPCEntry, LoreChunk, CondenserState, ArchiveIndexEntry, ArchiveScene, SemanticFact, EndpointConfig, ProviderConfig } from '../types';
 import { uid } from '../utils/uid';
 import { buildPayload, sendMessage, generateNPCProfile, updateExistingNPCs } from './chatEngine';
-import { shouldCondense, condenseHistory } from './condenser';
-import { runSaveFilePipeline } from './saveFileEngine';
 import { retrieveRelevantLore, searchLoreByQuery } from './loreRetriever';
 import { recallArchiveScenes, retrieveArchiveMemory, fetchArchiveScenes } from './archiveMemory';
 import { rankChapters, recallWithChapterFunnel } from './archiveChapterEngine';
@@ -274,48 +272,6 @@ export async function runTurn(
     // Attach the debug payload to the user message we added earlier
     callbacks.updateLastMessage({ debugPayload: payload });
 
-    const triggerCondense = async () => {
-        if (condenser.isCondensing || !activeCampaignId) return;
-        callbacks.setCondensing(true);
-        try {
-            const currentProvider = state.getFreshProvider();
-            if (!currentProvider) return;
-            
-            const currentMsgs = state.getMessages();
-            const uncondensed = currentMsgs.slice(condenser.condensedUpToIndex + 1);
-            const saveResult = await runSaveFilePipeline(currentProvider as EndpointConfig | ProviderConfig, uncondensed, context);
-
-            if (saveResult.canonSuccess) callbacks.updateContext({ canonState: saveResult.canonState });
-            if (saveResult.coreMemorySlots) callbacks.updateContext({ coreMemorySlots: saveResult.coreMemorySlots });
-            if (saveResult.indexSuccess) callbacks.updateContext({ headerIndex: saveResult.headerIndex });
-
-            console.log(`[SavePipeline] Canon: ${saveResult.canonSuccess ? '✓' : '✗'}, Index: ${saveResult.indexSuccess ? '✓' : '✗'}`);
-            if (!saveResult.canonSuccess) toast.warning('Canon state update failed — using previous state');
-            if (!saveResult.indexSuccess) toast.warning('Header index update failed — using previous index');
-
-            const result = await condenseHistory(
-                currentProvider,
-                currentMsgs,
-                context, // Using stale context, but safe enough here
-                condenser.condensedUpToIndex,
-                condenser.condensedSummary,
-                activeCampaignId,
-                npcLedger.map(n => n.name),
-                settings.contextLimit
-            );
-            callbacks.setCondensed(result.summary, result.upToIndex);
-
-            const freshIndex = await api.archive.getIndex(activeCampaignId);
-            callbacks.setArchiveIndex(freshIndex);
-            console.log(`[Archive] Reloaded index: ${freshIndex.length} entries`);
-        } catch (err) {
-            console.error('[Condenser]', err);
-            toast.error('Auto-condense failed');
-        } finally {
-            callbacks.setCondensing(false);
-        }
-    };
-
     const executeTurn = async (currentPayload: any[], toolCallCount = 0, apiRetryCount = 0) => {
         const assistantMsgId = uid();
         callbacks.addMessage({ id: assistantMsgId, role: 'assistant' as const, content: '', timestamp: Date.now() });
@@ -446,10 +402,6 @@ export async function runTurn(
                             }
                         }
                     }
-                }
-                
-                if (settings.autoCondenseEnabled && shouldCondense(allMsgs, settings.contextLimit, condenser.condensedUpToIndex)) {
-                    triggerCondense();
                 }
             },
             (err) => {

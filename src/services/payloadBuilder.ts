@@ -76,29 +76,8 @@ export function buildPayload(
     const stableParts: string[] = [];
     if (sceneNumber) stableParts.push(`[CURRENT SCENE: #${sceneNumber}]`);
     if (context.rulesRaw) stableParts.push(context.rulesRaw);
-    if (context.canonStateActive) {
-        if (context.coreMemorySlots && context.coreMemorySlots.length > 0) {
-            const slotLines = context.coreMemorySlots
-                .sort((a, b) => b.priority - a.priority)
-                .map(slot => `■ ${slot.key} [p${slot.priority}]: ${slot.value}`)
-                .join('\n');
-            stableParts.push(`[CORE MEMORY — ALWAYS ACCURATE]\n${slotLines}\n[END CORE MEMORY]`);
-        } else if (context.canonState) {
-            try {
-                const parsed = JSON.parse(context.canonState);
-                if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].key) {
-                    const slotLines = parsed
-                        .sort((a: any, b: any) => b.priority - a.priority)
-                        .map((slot: any) => `■ ${slot.key} [p${slot.priority}]: ${slot.value}`)
-                        .join('\n');
-                    stableParts.push(`[CORE MEMORY — ALWAYS ACCURATE]\n${slotLines}\n[END CORE MEMORY]`);
-                } else {
-                    stableParts.push(context.canonState);
-                }
-            } catch {
-                stableParts.push(context.canonState);
-            }
-        }
+    if (context.canonStateActive && context.canonState) {
+        stableParts.push(context.canonState);
     }
     if (context.headerIndexActive && context.headerIndex) stableParts.push(context.headerIndex);
     if (context.starterActive && context.starter) stableParts.push(context.starter);

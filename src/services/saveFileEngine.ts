@@ -1,5 +1,27 @@
-import type { ChatMessage, GameContext, ProviderConfig, EndpointConfig, CoreMemorySlot, ArchiveChapter } from '../types';
+import type { ChatMessage, GameContext, ProviderConfig, EndpointConfig, ArchiveChapter } from '../types';
 import { countTokens } from './tokenizer';
+import { extractJson } from './payloadBuilder';
+
+const BATCH_TOKEN_LIMIT = 100_000; // max tokens per LLM call for save engine
+
+function chunkMessagesByTokenBudget(messages: ChatMessage[], budget: number): ChatMessage[][] {
+    const chunks: ChatMessage[][] = [];
+    let currentChunk: ChatMessage[] = [];
+    let currentTokens = 0;
+
+    for (const msg of messages) {
+        const cost = countTokens(msg.content);
+        if (currentTokens + cost > budget && currentChunk.length > 0) {
+            chunks.push(currentChunk);
+            currentChunk = [];
+            currentTokens = 0;
+        }
+        currentChunk.push(msg);
+        currentTokens += cost;
+    }
+    if (currentChunk.length > 0) chunks.push(currentChunk);
+    return chunks;
+}
 
 // ─── Header Index Section Headers (from header_index.md template) ───
 const HEADER_INDEX_SECTIONS = [
@@ -25,38 +47,7 @@ function containsNormalized(haystack: string, needle: string): boolean {
     return normalizeForComparison(haystack).includes(normalizeForComparison(needle));
 }
 
-export function validateCanonState(output: string): { valid: boolean; missing: string[]; slots?: CoreMemorySlot[] } {
-    const missing: string[] = [];
 
-    let cleaned = output.trim();
-    const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) cleaned = fenceMatch[1].trim();
-
-    let slots: CoreMemorySlot[] | undefined;
-    try {
-        const parsed = JSON.parse(cleaned);
-        if (!Array.isArray(parsed)) {
-            return { valid: false, missing: ['Output is not a JSON array'] };
-        }
-        slots = parsed;
-
-        const keys = new Set(parsed.map((s: any) => (s.key || '').toUpperCase()));
-        if (!keys.has('PLAYER_STATUS')) missing.push('PLAYER_STATUS slot');
-        if (!keys.has('LOCATION')) missing.push('LOCATION slot');
-        if (!keys.has('TIME_DATE')) missing.push('TIME_DATE slot');
-
-        for (const slot of parsed) {
-            if (!slot.key || typeof slot.value !== 'string' || typeof slot.priority !== 'number') {
-                missing.push('Invalid slot structure');
-                break;
-            }
-        }
-    } catch (e) {
-        return { valid: false, missing: ['Failed to parse JSON'] };
-    }
-
-    return { valid: missing.length === 0, missing, slots };
-}
 
 export function validateHeaderIndex(output: string): { valid: boolean; missing: string[] } {
     const missing = [
@@ -92,86 +83,6 @@ async function llmCall(provider: ProviderConfig | EndpointConfig, prompt: string
 
     const data = await res.json();
     return data.choices?.[0]?.message?.content ?? '';
-}
-
-// ─── Canon State Generator ───
-
-function buildCanonStatePrompt(recentMessages: ChatMessage[], existingCanonState: string): string {
-    const turns = recentMessages
-        .map((m) => `[${m.role.toUpperCase()}]: ${m.content}`)
-        .join('\n\n');
-
-    return [
-        'You are a TTRPG session state tracker. Generate the CURRENT Canon State as a JSON array of memory slots.',
-        '',
-        'OUTPUT FORMAT — You MUST output a JSON array. Each element is an object with these fields:',
-        '  - key: A SHORT_CAPS_IDENTIFIER (e.g. "PLAYER_STATUS", "LOCATION", "X_DEATH", "ACTIVE_QUEST")',
-        '  - value: A concise factual string (e.g. "X - DEAD (killed by Malachar, scene 020)")',
-        '  - priority: A number 1-10 (10 = critical/unlosable, 1 = trivial detail)',
-        '  - sceneId: The scene number where this was established (e.g. "020")',
-        '',
-        'REQUIRED SLOTS (you MUST include these):',
-        '  - PLAYER_STATUS: Current HP, mana, effects, equipment',
-        '  - LOCATION: Current location and atmosphere',
-        '  - TIME_DATE: Current in-game time/date',
-        '',
-        'ADDITIONAL SLOTS — add as many as needed for:',
-        '  - Character deaths (priority 10, key format: "NAME_DEATH")',
-        '  - Major reveals/plot twists (priority 8-10)',
-        '  - Destroyed/changed locations (priority 8-10)',
-        '  - Active threats (priority 7-9)',
-        '  - Faction state changes (priority 6-8)',
-        '  - Important items acquired/lost (priority 5-7)',
-        '',
-        'RULES:',
-        '1. Merge the existing slots with new information',
-        '2. For deaths and irreversible events: ALWAYS keep them (append-only). Priority 10.',
-        '3. Preserve ALL proper nouns exactly as written',
-        '4. Use factual, concise values — NO prose or narrative',
-        '5. Maximum 15 slots total',
-        '6. Output ONLY the JSON array, no markdown fences, no commentary',
-        '',
-        'EXISTING CORE MEMORY SLOTS:',
-        existingCanonState || '[]',
-        '',
-        'RECENT SESSION TURNS:',
-        turns,
-    ].join('\n');
-}
-
-export async function generateCanonState(
-    provider: ProviderConfig | EndpointConfig,
-    recentMessages: ChatMessage[],
-    existingCanonState: string,
-    maxRetries = 1
-): Promise<{ canonState: string; slots: CoreMemorySlot[]; success: boolean }> {
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const prompt = attempt === 0
-            ? buildCanonStatePrompt(recentMessages, existingCanonState)
-            : buildCanonStatePrompt(recentMessages, existingCanonState) +
-            '\n\nPREVIOUS ATTEMPT FAILED VALIDATION. Output ONLY a valid JSON array of slot objects. No markdown fences.';
-
-        console.log(`[SaveFileEngine] Generating Canon State... (Attempt ${attempt + 1})`, {
-            messages: recentMessages.length,
-            promptTokens: countTokens(prompt)
-        });
-
-        const output = await llmCall(provider, prompt);
-        const result = validateCanonState(output);
-
-        if (result.valid && result.slots) {
-            return { canonState: JSON.stringify(result.slots), slots: result.slots, success: true };
-        }
-        console.warn(`[SaveFileEngine] Canon State attempt ${attempt + 1} failed validation:`, result.missing);
-    }
-
-    let existingSlots: CoreMemorySlot[] = [];
-    try {
-        existingSlots = JSON.parse(existingCanonState);
-        if (!Array.isArray(existingSlots)) existingSlots = [];
-    } catch { existingSlots = []; }
-
-    return { canonState: existingCanonState, slots: existingSlots, success: false };
 }
 
 // ─── Header Index Generator ───
@@ -301,32 +212,49 @@ export async function generateHeaderIndex(
     existingHeaderIndex: string,
     maxRetries = 1
 ): Promise<{ headerIndex: string; success: boolean }> {
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const prompt = attempt === 0
-            ? buildHeaderIndexPrompt(recentMessages, existingHeaderIndex)
-            : buildHeaderIndexPrompt(recentMessages, existingHeaderIndex) +
-            '\n\nPREVIOUS ATTEMPT FAILED VALIDATION. Ensure BOTH sections are present with SCENE_HEADERS entries.';
+    const chunks = chunkMessagesByTokenBudget(recentMessages, BATCH_TOKEN_LIMIT);
 
-        console.log(`[SaveFileEngine] Generating Header Index... (Attempt ${attempt + 1})`, {
-            messages: recentMessages.length,
-            promptTokens: countTokens(prompt)
-        });
+    let runningIndex = existingHeaderIndex;
+    let anySuccess = false;
 
-        const output = await llmCall(provider, prompt);
-        const { valid } = validateHeaderIndex(output);
+    for (let ci = 0; ci < chunks.length; ci++) {
+        const chunk = chunks[ci];
+        let batchSuccess = false;
 
-        if (valid) {
-            const merged = mergeHeaderIndex(existingHeaderIndex, output);
-            const mergedValid = validateHeaderIndex(merged);
-            if (mergedValid.valid) {
-                return { headerIndex: merged, success: true };
+        for (let attempt = 0; attempt <= maxRetries; attempt++) {
+            const prompt = attempt === 0
+                ? buildHeaderIndexPrompt(chunk, runningIndex)
+                : buildHeaderIndexPrompt(chunk, runningIndex) +
+                  '\n\nPREVIOUS ATTEMPT FAILED VALIDATION. Ensure BOTH sections are present with SCENE_HEADERS entries.';
+
+            console.log(`[SaveFileEngine] Generating Header Index... (Batch ${ci + 1}/${chunks.length}, Attempt ${attempt + 1})`, {
+                messages: chunk.length,
+                promptTokens: countTokens(prompt)
+            });
+
+            const output = await llmCall(provider, prompt);
+            const { valid } = validateHeaderIndex(output);
+
+            if (valid) {
+                const merged = mergeHeaderIndex(runningIndex, output);
+                const mergedValid = validateHeaderIndex(merged);
+                if (mergedValid.valid) {
+                    runningIndex = merged;
+                    batchSuccess = true;
+                    anySuccess = true;
+                    break;
+                }
+                console.warn(`[SaveFileEngine] Header Index batch ${ci + 1} merged result failed validation:`, mergedValid.missing);
             }
-            console.warn(`[SaveFileEngine] Header Index merged result failed validation:`, mergedValid.missing);
+            console.warn(`[SaveFileEngine] Header Index batch ${ci + 1} attempt ${attempt + 1} failed validation`);
         }
-        console.warn(`[SaveFileEngine] Header Index attempt ${attempt + 1} failed validation`);
+
+        if (!batchSuccess) {
+            console.warn(`[SaveFileEngine] Header Index batch ${ci + 1} failed all retries, continuing with current index`);
+        }
     }
 
-    return { headerIndex: existingHeaderIndex, success: false };
+    return { headerIndex: runningIndex, success: anySuccess };
 }
 
 // ─── Full Pipeline ───
@@ -335,19 +263,11 @@ export async function runSaveFilePipeline(
     provider: ProviderConfig | EndpointConfig,
     recentMessages: ChatMessage[],
     context: GameContext
-): Promise<{ canonState: string; headerIndex: string; canonSuccess: boolean; indexSuccess: boolean; coreMemorySlots?: CoreMemorySlot[] }> {
-    // Run both LLM calls in parallel — each takes 5-15s, so sequential was 10-30s total.
-    const [canonResult, indexResult] = await Promise.all([
-        generateCanonState(provider, recentMessages, context.canonState),
-        generateHeaderIndex(provider, recentMessages, context.headerIndex),
-    ]);
-
+): Promise<{ headerIndex: string; indexSuccess: boolean }> {
+    const indexResult = await generateHeaderIndex(provider, recentMessages, context.headerIndex);
     return {
-        canonState: canonResult.canonState,
         headerIndex: indexResult.headerIndex,
-        canonSuccess: canonResult.success,
         indexSuccess: indexResult.success,
-        coreMemorySlots: canonResult.slots,
     };
 }
 
@@ -432,11 +352,7 @@ function buildChapterSummaryPrompt(
  * Extract JSON from LLM output, handling markdown fences and common errors.
  */
 export function parseChapterSummaryOutput(raw: string): ChapterSummaryOutput | null {
-    let cleaned = raw.trim();
-
-    // Remove markdown fences
-    const fenceMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) cleaned = fenceMatch[1].trim();
+    const cleaned = extractJson(raw.trim());
 
     try {
         const parsed = JSON.parse(cleaned);

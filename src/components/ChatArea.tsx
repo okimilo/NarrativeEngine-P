@@ -4,7 +4,7 @@ import { Send, Save, Loader2, Zap, Scroll, Edit2, RotateCcw, Trash2, Check, X, S
 import ReactMarkdown from 'react-markdown';
 import { useAppStore } from '../store/useAppStore';
 import type { ChatMessage, EndpointConfig, ProviderConfig, ArchiveChapter } from '../types';
-import { condenseHistory } from '../services/condenser';
+import { condenseHistory, shouldCondense } from '../services/condenser';
 import { runSaveFilePipeline, generateChapterSummary } from '../services/saveFileEngine';
 import { runTurn } from '../services/turnOrchestrator';
 import { api } from '../services/apiClient';
@@ -72,6 +72,16 @@ export function ChatArea() {
         bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages.length]);
 
+    // Auto-condense: fires after each turn completes (isStreaming → false) or message count changes.
+    // Guarded by !isStreaming so we never snapshot a partial AI message mid-stream.
+    useEffect(() => {
+        if (isStreaming || condenser.isCondensing || !activeCampaignId) return;
+        if (shouldCondense(messages, settings.contextLimit, condenser.condensedUpToIndex)) {
+            triggerCondense();
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isStreaming, messages.length]);
+
     // dropdownRef kept for future dropdown dismiss logic
 
     const triggerCondense = async () => {
@@ -81,6 +91,7 @@ export function ChatArea() {
                 condenseAbortRef.current = null;
             }
             setCondensing(false);
+            setLoadingStatus(null);
             toast.info('Condense cancelled');
             return;
         }
@@ -91,43 +102,59 @@ export function ChatArea() {
             if (!provider) return;
             const currentCtx = useAppStore.getState().context;
             const uncondensed = messages.slice(condenser.condensedUpToIndex + 1);
-            const saveResult = await runSaveFilePipeline(provider as EndpointConfig | ProviderConfig, uncondensed, currentCtx);
-
-            if (saveResult.canonSuccess) {
-                updateContext({ canonState: saveResult.canonState });
-            } else {
-                toast.warning('Canon state update failed — using previous state');
+            setLoadingStatus('Archiving recent messages...');
+            try {
+                const saveResult = await runSaveFilePipeline(provider as EndpointConfig | ProviderConfig, uncondensed, currentCtx);
+                if (saveResult.indexSuccess) {
+                    updateContext({ headerIndex: saveResult.headerIndex });
+                }
+                console.log(`[SavePipeline] Index: ${saveResult.indexSuccess ? '✓' : '✗'}`);
+            } catch (saveErr) {
+                console.error('[SavePipeline] Failed (non-fatal, proceeding to condense):', saveErr);
             }
-            if (saveResult.indexSuccess) {
-                updateContext({ headerIndex: saveResult.headerIndex });
-            } else {
-                toast.warning('Header index update failed — using previous index');
-            }
-
-            console.log(`[SavePipeline] Canon: ${saveResult.canonSuccess ? '✓' : '✗'}, Index: ${saveResult.indexSuccess ? '✓' : '✗'}`);
 
             const freshCtx = useAppStore.getState().context;
             const npcLedger = useAppStore.getState().npcLedger;
             const campaignId = useAppStore.getState().activeCampaignId || '';
-            const result = await condenseHistory(
-                provider,
-                messages,
-                freshCtx,
-                condenser.condensedUpToIndex,
-                condenser.condensedSummary,
-                campaignId,
-                npcLedger.map(n => n.name),
-                settings.contextLimit,
-                condenseAbortRef.current.signal
-            );
-            setCondensed(result.summary, result.upToIndex);
+
+            // Manual trigger: always do at least 1 pass regardless of threshold.
+            // Continue looping until context is comfortable or max passes reached.
+            let runningUpToIndex = condenser.condensedUpToIndex;
+            let runningSummary = condenser.condensedSummary;
+            let passes = 0;
+            const MAX_PASSES = 10;
+            do {
+                passes++;
+                setLoadingStatus(`Condensing (Pass ${passes})...`);
+                console.log(`[Condenser] Pass ${passes} — compressing from index ${runningUpToIndex + 1}`);
+                const result = await condenseHistory(
+                    provider,
+                    messages,
+                    freshCtx,
+                    runningUpToIndex,
+                    runningSummary,
+                    campaignId,
+                    npcLedger.map(n => n.name),
+                    settings.contextLimit,
+                    condenseAbortRef.current?.signal
+                );
+                // Safety: if no progress, break to prevent infinite loop
+                if (result.upToIndex <= runningUpToIndex) break;
+                runningUpToIndex = result.upToIndex;
+                runningSummary = result.summary;
+                setCondensed(result.summary, result.upToIndex);
+            } while (passes < MAX_PASSES && shouldCondense(messages, settings.contextLimit, runningUpToIndex));
+            console.log(`[Condenser] Done — ${passes} pass(es), condensed up to index ${runningUpToIndex}`);
 
             if (campaignId) {
-                const fresh = await api.archive.getIndex(campaignId);
+                setLoadingStatus('Refreshing indices...');
+                const [fresh, freshFacts] = await Promise.all([
+                    api.archive.getIndex(campaignId),
+                    api.facts.get(campaignId)
+                ]);
                 setArchiveIndex(fresh);
-                console.log(`[Archive] Reloaded index: ${fresh.length} entries`);
-                const freshFacts = await api.facts.get(campaignId);
                 setSemanticFacts(freshFacts);
+                console.log(`[Archive] Reloaded index: ${fresh.length} entries`);
             }
         } catch (err) {
             if (err instanceof Error && err.name === 'AbortError') {
@@ -139,6 +166,7 @@ export function ChatArea() {
             toast.error('Condenser failed — history was not compressed');
         } finally {
             setCondensing(false);
+            setLoadingStatus(null);
             condenseAbortRef.current = null;
         }
     };
@@ -419,12 +447,26 @@ export function ChatArea() {
                 console.log('[Archive] Chapters repaired during rollback');
             }
             
-            // Reset condenser (always safe after rollback)
-            useAppStore.getState().setCondenser({
-                condensedSummary: '',
-                condensedUpToIndex: -1,
-                isCondensing: false,
-            });
+            // Only reset condenser if rollback affects the condensed portion.
+            // If the rolled-back scene is newer than the last condensed message,
+            // the summary is still valid and should be preserved.
+            const storeState = useAppStore.getState();
+            const currentCondenser = storeState.condenser;
+            const currentMessages = storeState.messages;
+            const lastCondensedMsg = currentCondenser.condensedUpToIndex >= 0
+                ? currentMessages[currentCondenser.condensedUpToIndex]
+                : null;
+            const rollbackAffectsCondensed = !lastCondensedMsg || fromTimestamp <= lastCondensedMsg.timestamp;
+            if (rollbackAffectsCondensed) {
+                storeState.setCondenser({
+                    condensedSummary: '',
+                    condensedUpToIndex: -1,
+                    isCondensing: false,
+                });
+                console.log('[Archive] Condenser reset — rollback affected condensed portion');
+            } else {
+                console.log('[Archive] Condenser preserved — rollback was after condensed portion');
+            }
             
             console.log(`[Archive] Rolled back from scene #${target.sceneId}`);
         } catch (err) {
