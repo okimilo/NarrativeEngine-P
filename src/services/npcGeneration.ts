@@ -18,7 +18,7 @@ export async function generateNPCProfile(
 
         const systemPrompt = `You are a background GM assistant running silently.
 The game mentioned a new character named "${npcName}".
-Your job is to generate a psychological profile for this character based on the recent chat history.
+Your job is to generate a profile for this character based on the recent chat history.
 If the character is barely mentioned, invent a plausible, tropes-appropriate profile that fits the current scene context.
 
 RESPOND ONLY WITH VALID JSON. NO MARKDOWN FORMATTING. NO EXPLANATIONS.
@@ -42,16 +42,12 @@ The JSON must perfectly match this structure:
     "distinctMarks": "String",
     "clothing": "String"
   },
-  "disposition": "String (Helpful, Hostile, Suspicion, etc)",
+  "disposition": "String (current mood/attitude: Helpful, Hostile, Suspicious, etc)",
   "goals": "String (Core motive)",
-  "nature": 5,
-  "training": 5,
-  "emotion": 5,
-  "social": 5,
-  "belief": 5,
-  "ego": 5
-}
-Note: the 6 axes (nature...ego) MUST be integers from 1 to 10.`;
+  "voice": "String — describe HOW this NPC speaks: sentence length, vocabulary level, verbal quirks, catchphrases, accent notes. Be specific.",
+  "personality": "String — core personality traits in plain language. What drives them? How do they treat others? What do they fear?",
+  "exampleOutput": "String — one line of in-character dialogue that demonstrates their voice and personality. Include a brief action in brackets if needed."
+}`;
 
         const messages: OpenAIMessage[] = [
             { role: 'system', content: systemPrompt },
@@ -81,18 +77,15 @@ Note: the 6 axes (nature...ego) MUST be integers from 1 to 10.`;
                     status: parsed.status || 'Alive',
                     faction: parsed.faction || 'Unknown',
                     storyRelevance: parsed.storyRelevance || 'Unknown',
-                    appearance: '', // legacy
+                    appearance: '',
                     visualProfile: parsed.visualProfile || {
                         race: 'Unknown', gender: 'Unknown', ageRange: 'Unknown', build: 'Unknown', symmetry: 'Unknown', hairStyle: 'Unknown', eyeColor: 'Unknown', skinTone: 'Unknown', gait: 'Unknown', distinctMarks: 'None', clothing: 'Unknown', artStyle: 'Anime'
                     },
                     disposition: parsed.disposition || 'Neutral',
                     goals: parsed.goals || 'Unknown',
-                    nature: Number(parsed.nature) || 5,
-                    training: Number(parsed.training) || 5,
-                    emotion: Number(parsed.emotion) || 5,
-                    social: Number(parsed.social) || 5,
-                    belief: Number(parsed.belief) || 5,
-                    ego: Number(parsed.ego) || 5,
+                    voice: parsed.voice || '',
+                    personality: parsed.personality || parsed.disposition || 'Unknown',
+                    exampleOutput: parsed.exampleOutput || '',
                     affinity: 50,
                 };
 
@@ -137,7 +130,8 @@ export async function updateExistingNPCs(
             `Disposition: ${npc.disposition || 'Unknown'}\n` +
             `Goals: ${npc.goals || 'Unknown'}\n` +
             `Affinity: ${npc.affinity ?? 50}/100\n` +
-            `Axes: Nature=${npc.nature}/10, Training=${npc.training}/10, Emotion=${npc.emotion}/10, Social=${npc.social}/10, Belief=${npc.belief}/10, Ego=${npc.ego}/10\n` +
+            `Personality: ${npc.personality || npc.disposition || 'Unknown'}\n` +
+            `Voice: ${npc.voice || 'not defined'}\n` +
             `Faction: ${npc.faction || 'Unknown'}\n` +
             `Story Relevance: ${npc.storyRelevance || 'Unknown'}\n`;
 
@@ -147,7 +141,7 @@ export async function updateExistingNPCs(
         return data;
     }).join('\n\n');
 
-    const prompt = `You are a background game state analyzer. Your job is to read the RECENT CONTEXT of an RPG session and determine if any of the provided NPCs have undergone a shift in their status, psychological axes, goals, disposition, faction, or relevance.
+    const prompt = `You are a background game state analyzer. Your job is to read the RECENT CONTEXT of an RPG session and determine if any of the provided NPCs have undergone a shift in their status, personality, goals, disposition, faction, or relevance.
 
 [RECENT CONTEXT]
 ${recentContext}
@@ -160,12 +154,13 @@ ${npcDatas}
 If NO changes occurred for ANY of these NPCs, respond EXACTLY with:
 {"updates": []}
 
-If ANY changes occurred, respond with a JSON object containing an "updates" array. Each update must include the basic "name" and ANY attributes that have fundamentally changed (status, disposition, goals, nature, training, emotion, social, belief, ego, affinity, faction, storyRelevance, visualProfile). DO NOT include attributes that stayed the same.
+If ANY changes occurred, respond with a JSON object containing an "updates" array. Each update must include the basic "name" and ANY attributes that have fundamentally changed (status, disposition, goals, personality, voice, affinity, faction, storyRelevance, visualProfile). DO NOT include attributes that stayed the same.
 Valid statuses: Alive, Deceased, Missing, Unknown.
 Note: "affinity" is a 0-100 scale of how much they like the player (0=Nemesis, 50=Neutral, 100=Ally). Update this if the player did something to gain or lose favor.
+Do NOT change personality or voice unless the scene contains a genuinely transformative event for this character.
 
 Example of an NPC dying and getting angry:
-{"updates": [{"name": "Captain Vorin", "changes": {"status": "Deceased", "emotion": 9, "storyRelevance": "His death sparked a rebellion"}}]}
+{"updates": [{"name": "Captain Vorin", "changes": {"status": "Deceased", "personality": "consumed by rage in final moments, betrayed and broken", "storyRelevance": "His death sparked a rebellion"}}]}
 
 RESPOND ONLY WITH VALID JSON.`;
 
@@ -202,18 +197,15 @@ RESPOND ONLY WITH VALID JSON.`;
                         // If AI provided visualProfile, ensure we get all fields, keeping defaults for missing ones
                         const changes = { ...update.changes };
 
-                        // Snapshot current axes before applying changes for drift detection
-                        const axisFields = ['nature', 'training', 'emotion', 'social', 'belief', 'ego', 'affinity'] as const;
-                        const hasAxisChange = axisFields.some(f => changes[f] !== undefined);
+                        const hasPersonalityChange = changes.personality !== undefined || changes.voice !== undefined;
+                        const hasAffinityChange = changes.affinity !== undefined;
 
-                        if (hasAxisChange) {
-                            const previousAxes: Record<string, number> = {};
-                            for (const f of axisFields) {
-                                if (changes[f] !== undefined) {
-                                    previousAxes[f] = targetNpc[f] as number;
-                                }
-                            }
-                            changes.previousAxes = previousAxes;
+                        if (hasPersonalityChange || hasAffinityChange) {
+                            changes.previousSnapshot = {
+                                personality: targetNpc.personality || targetNpc.disposition || '',
+                                voice: targetNpc.voice || '',
+                                affinity: targetNpc.affinity,
+                            };
                             changes.shiftTurnCount = 0;
                         } else if (targetNpc.shiftTurnCount !== undefined && targetNpc.shiftTurnCount < 3) {
                             changes.shiftTurnCount = (targetNpc.shiftTurnCount || 0) + 1;

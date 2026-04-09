@@ -15,7 +15,8 @@ function scoreEntry(
     entry: ArchiveIndexEntry,
     contextText: string,
     contextActivations: Record<string, number>,
-    totalScenes: number
+    totalScenes: number,
+    npcPerspective?: string
 ): number {
     // D1: Recency bonus (always positive, logarithmic — never zero)
     const sceneNum = parseInt(entry.sceneId, 10) || 0;
@@ -54,7 +55,28 @@ function scoreEntry(
     }
 
     // Weighted additive: (0.5 × recency) + (1.0 × importance) + (2.0 × activation)
-    return (0.5 * recencyBonus) + (1.0 * importance) + (2.0 * activation);
+    let score = (0.5 * recencyBonus) + (1.0 * importance) + (2.0 * activation);
+
+    // POV-aware boost/penalty
+    if (npcPerspective) {
+        const witnesses = entry.witnesses ?? [];
+        const wasWitness = witnesses.some(w =>
+            w.toLowerCase() === npcPerspective.toLowerCase()
+        );
+        const wasMentioned = entry.npcsMentioned.some(m =>
+            m.toLowerCase() === npcPerspective.toLowerCase()
+        );
+
+        if (wasWitness) {
+            score *= 1.5;
+        } else if (wasMentioned) {
+            score *= 0.8;
+        } else if (witnesses.length > 0) {
+            score *= 0.3;
+        }
+    }
+
+    return score;
 }
 
 /**
@@ -117,6 +139,7 @@ export function expandActivationsWithFacts(
 
     const expanded = { ...activations };
 
+    // 1-hop expansion
     for (const fact of facts) {
         const sLower = fact.subject.toLowerCase();
         const oLower = fact.object.toLowerCase();
@@ -125,6 +148,34 @@ export function expandActivationsWithFacts(
         }
         if (expanded[oLower] && !expanded[sLower]) {
             expanded[sLower] = expanded[oLower] * 0.5;
+        }
+    }
+
+    // 2-hop expansion: entities connected via an intermediate entity
+    const hop2Activations: Record<string, number> = {};
+    for (const [entity, weight] of Object.entries(expanded)) {
+        if (weight < 0.3) continue;
+        const hop1Facts = facts.filter(f =>
+            f.subject.toLowerCase() === entity || f.object.toLowerCase() === entity
+        );
+        for (const hop1Fact of hop1Facts) {
+            const hop1Entity = hop1Fact.subject.toLowerCase() === entity
+                ? hop1Fact.object.toLowerCase() : hop1Fact.subject.toLowerCase();
+            const hop2Facts = facts.filter(f =>
+                f.subject.toLowerCase() === hop1Entity || f.object.toLowerCase() === hop1Entity
+            );
+            for (const h2f of hop2Facts) {
+                const hop2Entity = h2f.subject.toLowerCase() === hop1Entity
+                    ? h2f.object.toLowerCase() : h2f.subject.toLowerCase();
+                if (!expanded[hop2Entity] && hop2Entity !== entity) {
+                    hop2Activations[hop2Entity] = (hop2Activations[hop2Entity] || 0) + weight * 0.25;
+                }
+            }
+        }
+    }
+    for (const [entity, weight] of Object.entries(hop2Activations)) {
+        if (!expanded[entity]) {
+            expanded[entity] = weight;
         }
     }
 
@@ -142,7 +193,8 @@ export function retrieveArchiveMemory(
     npcLedger?: NPCEntry[],
     maxScenes?: number,
     semanticFacts?: { subject: string; predicate: string; object: string; importance: number }[],
-    sceneRanges?: [string, string][]
+    sceneRanges?: [string, string][],
+    npcPerspective?: string
 ): string[] {
     if (!index || index.length === 0) {
         console.log('[Archive Retrieval] Index is empty — no recall.');
@@ -173,7 +225,7 @@ export function retrieveArchiveMemory(
     const totalScenes = scopedIndex.length;
     const scored = scopedIndex.map(entry => ({
         sceneId: entry.sceneId,
-        score: scoreEntry(entry, contextText, contextActivations, totalScenes),
+        score: scoreEntry(entry, contextText, contextActivations, totalScenes, npcPerspective),
     }));
 
     const sorted = scored.filter(s => s.score > 0).sort((a, b) => b.score - a.score);
@@ -255,9 +307,10 @@ export async function recallArchiveScenes(
     recentMessages: ChatMessage[],
     tokenBudget = 3000,
     npcLedger?: NPCEntry[],
-    semanticFacts?: { subject: string; predicate: string; object: string; importance: number }[]
+    semanticFacts?: { subject: string; predicate: string; object: string; importance: number }[],
+    npcPerspective?: string
 ): Promise<ArchiveScene[]> {
-    const matchedIds = retrieveArchiveMemory(index, userMessage, recentMessages, npcLedger, undefined, semanticFacts);
+    const matchedIds = retrieveArchiveMemory(index, userMessage, recentMessages, npcLedger, undefined, semanticFacts, undefined, npcPerspective);
     if (matchedIds.length === 0) return [];
     return fetchArchiveScenes(campaignId, matchedIds, tokenBudget);
 }

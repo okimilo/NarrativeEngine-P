@@ -4,7 +4,7 @@ import { useAppStore } from '../store/useAppStore';
 import {
     listCampaigns, deleteCampaign, loadCampaignState,
     saveCampaign, saveCampaignState, saveLoreChunks, getLoreChunks,
-    getNPCLedger, loadArchiveIndex, saveNPCLedger, loadSemanticFacts
+    getNPCLedger, loadArchiveIndex, saveNPCLedger, loadSemanticFacts, loadEntities
 } from '../store/campaignStore';
 import { chunkLoreFile } from '../services/loreChunker';
 import { extractEngineSeeds } from '../services/loreEngineSeeder';
@@ -198,15 +198,16 @@ export function CampaignHub() {
     const handleSelectCampaign = async (campaign: Campaign) => {
         const updatedCampaign = { ...campaign, lastPlayedAt: Date.now() };
         await saveCampaign(updatedCampaign);
-        const [state, chunks, npcs, archiveIndex, semanticFacts] = await Promise.all([
+        const [state, chunks, npcs, archiveIndex, semanticFacts, entities] = await Promise.all([
             loadCampaignState(campaign.id), getLoreChunks(campaign.id),
             getNPCLedger(campaign.id), loadArchiveIndex(campaign.id), loadSemanticFacts(campaign.id),
+            loadEntities(campaign.id),
         ]);
         useAppStore.setState({
             context: { ...DEFAULT_CONTEXT, ...(state?.context ?? {}) },
             messages: state?.messages ?? [],
             condenser: { ...(state?.condenser ?? DEFAULT_CONDENSER), isCondensing: false },
-            loreChunks: chunks, npcLedger: npcs, archiveIndex, semanticFacts,
+            loreChunks: chunks, npcLedger: npcs, archiveIndex, semanticFacts, entities,
             activeCampaignId: campaign.id,
         });
     };

@@ -123,15 +123,23 @@ export type GameContext = {
     neutralCooldown: number;
     allyCooldown: number;
     interventionQueue: ('enemy' | 'neutral' | 'ally')[];
+    notebook: NotebookNote[];
+    notebookActive: boolean;
+};
+
+export type NotebookNote = {
+    id: string;
+    text: string;
+    timestamp: number;
 };
 
 export type ChatMessage = {
     id: string;
     role: 'system' | 'user' | 'assistant' | 'tool';
     content: string;
-    displayContent?: string; // Clean text for UI (without dice/surprise blocks)
+    displayContent?: string;
     timestamp: number;
-    debugPayload?: unknown; // Stores the exact JSON LLM payload
+    debugPayload?: unknown;
     name?: string;
     tool_calls?: {
         id: string;
@@ -139,6 +147,7 @@ export type ChatMessage = {
         function: { name: string; arguments: string };
     }[];
     tool_call_id?: string;
+    ephemeral?: boolean;
 };
 
 /** @deprecated — replaced by ArchiveIndexEntry + ArchiveScene. Kept for backwards-compat migration. */
@@ -157,6 +166,7 @@ export type ArchiveIndexEntry = {
     timestamp: number;
     keywords: string[];
     npcsMentioned: string[];
+    witnesses: string[];
     userSnippet: string;
     keywordStrengths?: Record<string, number>;
     npcStrengths?: Record<string, number>;
@@ -236,22 +246,23 @@ export type NPCEntry = {
     id: string;
     name: string;
     aliases: string;
-    appearance: string; // Legacy fallback or raw notes
-    visualProfile?: NPCVisualProfile; // Structured AI-ready fields
+    appearance: string;
+    visualProfile?: NPCVisualProfile;
     faction: string;
     storyRelevance: string;
     disposition: string;
     status: string;
     goals: string;
-    nature: number;   // 1-10
-    training: number; // 1-10
-    emotion: number;  // 1-10
-    social: number;   // 1-10
-    belief: number;   // 1-10
-    ego: number;      // 1-10
-    affinity: number; // 0-100
-    portrait?: string; // Image path or base64
-    previousAxes?: { nature?: number; training?: number; emotion?: number; social?: number; belief?: number; ego?: number; affinity?: number; };
+    voice: string;
+    personality: string;
+    exampleOutput: string;
+    affinity: number;
+    portrait?: string;
+    previousSnapshot?: {
+        personality: string;
+        voice: string;
+        affinity: number;
+    };
     shiftNote?: string;
     shiftTurnCount?: number;
 };
@@ -290,6 +301,17 @@ export type SemanticFact = {
     importance: number;
     sceneId: string;
     timestamp: number;
+    source?: 'regex' | 'llm';
+    confidence?: number;
+};
+
+export type EntityEntry = {
+    id: string;
+    name: string;
+    type: 'npc' | 'location' | 'object' | 'concept' | 'faction' | 'event';
+    aliases: string[];
+    firstSeen?: string;
+    factCount?: number;
 };
 
 export type ArchiveChapter = {

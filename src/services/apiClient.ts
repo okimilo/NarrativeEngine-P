@@ -1,15 +1,18 @@
-import type { AppSettings, ArchiveChapter, ArchiveIndexEntry, ChatMessage, CondenserState, GameContext, NPCEntry, SemanticFact, BackupMeta } from '../types';
+import type { AppSettings, ArchiveChapter, ArchiveIndexEntry, ChatMessage, CondenserState, GameContext, NPCEntry, SemanticFact, EntityEntry, BackupMeta } from '../types';
 
 const API = '/api';
 
 export const api = {
     archive: {
-        async append(campaignId: string, userText: string, assistantText: string): Promise<{ sceneId: string } | undefined> {
+        async append(campaignId: string, userText: string, assistantText: string, importance?: number, utilityConfig?: { endpoint: string; apiKey: string; model: string }): Promise<{ sceneId: string } | undefined> {
             try {
+                const body: Record<string, unknown> = { userContent: userText, assistantContent: assistantText };
+                if (importance !== undefined) body.importance = importance;
+                if (utilityConfig) body.utilityConfig = utilityConfig;
                 const res = await fetch(`${API}/campaigns/${campaignId}/archive`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userContent: userText, assistantContent: assistantText }),
+                    body: JSON.stringify(body),
                 });
                 if (res.ok) {
                     return await res.json();
@@ -129,6 +132,30 @@ export const api = {
                 console.warn('[Facts] Failed to fetch:', err);
             }
             return [];
+        },
+    },
+    entities: {
+        async get(campaignId: string): Promise<EntityEntry[]> {
+            try {
+                const res = await fetch(`${API}/campaigns/${campaignId}/entities`);
+                if (res.ok) return await res.json();
+            } catch (err) {
+                console.warn('[Entities] Failed to fetch:', err);
+            }
+            return [];
+        },
+        async merge(campaignId: string, survivorId: string, consumedId: string): Promise<boolean> {
+            try {
+                const res = await fetch(`${API}/campaigns/${campaignId}/entities/merge`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ survivorId, consumedId }),
+                });
+                return res.ok;
+            } catch (err) {
+                console.warn('[Entities] Failed to merge:', err);
+                return false;
+            }
         },
     },
     campaigns: {

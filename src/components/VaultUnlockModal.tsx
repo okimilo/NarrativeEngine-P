@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Lock, Eye, EyeOff, Loader2, CheckCircle } from 'lucide-react';
+import { Lock, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { toast } from './Toast';
 
 interface VaultUnlockModalProps {
@@ -13,7 +13,7 @@ export function VaultUnlockModal({ onUnlock, onUseMachineKey, hasRememberedKey }
     const [showPassword, setShowPassword] = useState(false);
     const [remember, setRemember] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
-    const [isTryingRemembered, setIsTryingRemembered] = useState(hasRememberedKey);
+    const [isTryingRemembered] = useState(hasRememberedKey);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();

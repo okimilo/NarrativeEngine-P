@@ -63,7 +63,8 @@ export function ChatArea() {
     const [condensedDraft, setCondensedDraft] = useState('');
     const bottomRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
-    const dropdownRef = useRef<HTMLDivElement>(null);
+    // dropdownRef reserved for future dropdown dismiss logic
+
     const abortControllerRef = useRef<AbortController | null>(null);
     const condenseAbortRef = useRef<AbortController | null>(null);
 
@@ -419,11 +420,15 @@ export function ChatArea() {
         const target = sorted.find(e => e.timestamp >= fromTimestamp);
         if (!target) return;
 
-        fetch('/api/campaigns/' + campaignId + '/backup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ trigger: 'pre-rollback', isAuto: true }),
-        }).catch(() => {});
+        try {
+            await fetch('/api/campaigns/' + campaignId + '/backup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ trigger: 'pre-rollback', isAuto: true }),
+            });
+        } catch (e) {
+            console.warn('[Archive] Pre-rollback backup failed — proceeding anyway:', e);
+        }
 
         try {
             await api.archive.deleteFrom(campaignId, target.sceneId);

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, RotateCcw, Trash2, Save, Clock, Loader2 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
-import { listBackups, createBackup, restoreBackup, deleteBackup, loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex, loadSemanticFacts, loadChapters } from '../store/campaignStore';
+import { listBackups, createBackup, restoreBackup, deleteBackup, loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex, loadSemanticFacts, loadChapters, loadEntities } from '../store/campaignStore';
 import type { BackupMeta } from '../types';
 import { toast } from './Toast';
 
@@ -59,13 +59,14 @@ export function BackupModal() {
         const ok = await restoreBackup(activeCampaignId, ts);
         if (ok) {
             toast.success('Restored from backup');
-            const [state, chunks, npcs, archiveIndex, semanticFacts, chapters] = await Promise.all([
+            const [state, chunks, npcs, archiveIndex, semanticFacts, chapters, entities] = await Promise.all([
                 loadCampaignState(activeCampaignId),
                 getLoreChunks(activeCampaignId),
                 getNPCLedger(activeCampaignId),
                 loadArchiveIndex(activeCampaignId),
                 loadSemanticFacts(activeCampaignId),
                 loadChapters(activeCampaignId),
+                loadEntities(activeCampaignId),
             ]);
             useAppStore.setState({
                 context: state?.context ?? useAppStore.getState().context,
@@ -76,6 +77,7 @@ export function BackupModal() {
                 archiveIndex: archiveIndex ?? [],
                 semanticFacts: semanticFacts ?? [],
                 chapters: chapters ?? [],
+                entities: entities ?? [],
             });
         } else {
             toast.error('Restore failed');

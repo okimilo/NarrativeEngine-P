@@ -2,21 +2,6 @@ import { Trash2, Save, Loader2, Sparkles, Users } from 'lucide-react';
 import { NPCPortraitSection } from './NPCPortraitSection';
 import type { NPCEntry, NPCVisualProfile } from '../../types';
 
-const AXIS_LABELS: Record<string, string[]> = {
-    'Nature': ['Pacifist', 'Gentle', 'Cautious', 'Measured', 'Pragmatic', 'Assertive', 'Aggressive', 'Brutal', 'Savage', 'Feral'],
-    'Training': ['Untrained', 'Dabbler', 'Novice', 'Apprentice', 'Competent', 'Seasoned', 'Veteran', 'Expert', 'Master', 'Legendary'],
-    'Emotion': ['Hollow', 'Stoic', 'Guarded', 'Composed', 'Steady', 'Sensitive', 'Volatile', 'Intense', 'Explosive', 'Hysterical'],
-    'Social': ['Mute', 'Recluse', 'Shy', 'Reserved', 'Neutral', 'Sociable', 'Charismatic', 'Influential', 'Magnetic', 'Manipulative'],
-    'Belief': ['Nihilist', 'Apathetic', 'Skeptic', 'Doubter', 'Moderate', 'Faithful', 'Devout', 'Zealous', 'Fanatical', 'Messianic'],
-    'Ego': ['Selfless', 'Servile', 'Meek', 'Humble', 'Balanced', 'Confident', 'Proud', 'Arrogant', 'Narcissistic', 'God-Complex']
-};
-
-function getAxisLabel(axis: string, value: number) {
-    const list = AXIS_LABELS[axis];
-    if (!list) return '';
-    return list[Math.max(0, Math.min(9, value - 1))];
-}
-
 type Props = {
     form: Partial<NPCEntry>;
     setForm: React.Dispatch<React.SetStateAction<Partial<NPCEntry>>>;
@@ -41,24 +26,6 @@ export function NPCEditForm({
             ...prev,
             visualProfile: { ...(prev.visualProfile || DEFAULT_VISUAL_PROFILE), [field]: value }
         }));
-    };
-
-    const renderSlider = (label: keyof NPCEntry, displayLabel: string) => {
-        const value = form[label] as number ?? 5;
-        return (
-            <div className="mb-4">
-                <div className="flex justify-between items-end mb-1">
-                    <label className="text-text-dim text-xs uppercase tracking-wider">{displayLabel}</label>
-                    <span className="text-xs text-terminal">{value} / 10 <span className="text-text-dim ml-1 text-[10px] hidden sm:inline">({getAxisLabel(displayLabel, value)})</span></span>
-                </div>
-                <input
-                    type="range" min="1" max="10" value={value}
-                    onChange={(e) => setForm({ ...form, [label]: parseInt(e.target.value, 10) })}
-                    disabled={!isEditing}
-                    className="w-full accent-terminal"
-                />
-            </div>
-        );
     };
 
     if (!selectedId && !isEditing) {
@@ -212,14 +179,43 @@ export function NPCEditForm({
 
                     <div className="bg-void p-4 rounded border border-border">
                         <div className="flex items-center gap-2 text-text-primary font-bold uppercase tracking-widest text-xs mb-4">
-                            Psychological Axes
+                            Character Profile
                         </div>
-                        {renderSlider('nature', 'Nature')}
-                        {renderSlider('training', 'Training')}
-                        {renderSlider('emotion', 'Emotion')}
-                        {renderSlider('social', 'Social')}
-                        {renderSlider('belief', 'Belief')}
-                        {renderSlider('ego', 'Ego')}
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-text-dim text-[10px] uppercase tracking-wider mb-1">Personality</label>
+                                <textarea
+                                    value={form.personality ?? ''}
+                                    onChange={e => setForm({ ...form, personality: e.target.value })}
+                                    disabled={!isEditing}
+                                    placeholder="Core personality traits in plain language..."
+                                    rows={2}
+                                    className="w-full bg-void border border-border rounded px-3 py-2 text-sm text-text-primary placeholder:text-text-dim/50 disabled:opacity-70 disabled:bg-surface disabled:border-transparent resize-none focus:outline-none focus:border-terminal"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-text-dim text-[10px] uppercase tracking-wider mb-1">Voice &amp; Speech Pattern</label>
+                                <textarea
+                                    value={form.voice ?? ''}
+                                    onChange={e => setForm({ ...form, voice: e.target.value })}
+                                    disabled={!isEditing}
+                                    placeholder="How this NPC speaks: tone, cadence, verbal quirks..."
+                                    rows={2}
+                                    className="w-full bg-void border border-border rounded px-3 py-2 text-sm text-text-primary placeholder:text-text-dim/50 disabled:opacity-70 disabled:bg-surface disabled:border-transparent resize-none focus:outline-none focus:border-terminal"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-text-dim text-[10px] uppercase tracking-wider mb-1">Example Dialogue</label>
+                                <textarea
+                                    value={form.exampleOutput ?? ''}
+                                    onChange={e => setForm({ ...form, exampleOutput: e.target.value })}
+                                    disabled={!isEditing}
+                                    placeholder="A sample line showing how this NPC talks and acts..."
+                                    rows={2}
+                                    className="w-full bg-void border border-border rounded px-3 py-2 text-sm text-text-primary placeholder:text-text-dim/50 disabled:opacity-70 disabled:bg-surface disabled:border-transparent resize-none focus:outline-none focus:border-terminal"
+                                />
+                            </div>
+                        </div>
                     </div>
                 </div>
 

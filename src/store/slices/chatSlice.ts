@@ -108,8 +108,7 @@ export const createChatSlice: StateCreator<ChatDeps, [], [], ChatSlice> = (set) 
     clearChat: () => set((_s) => {
         const newCondenser = { condensedSummary: '', condensedUpToIndex: -1, isCondensing: false };
         debouncedSaveCampaignState();
-        return { messages: [], condenser: newCondenser };
+        return { messages: [], condenser: newCondenser, context: { ..._s.context, notebook: [] } } as Partial<ChatDeps>;
     }),
-    // Fixed: archiveIndex belongs to CampaignSlice, so ChatDeps now includes it for valid typing.
     clearArchive: () => set({ archiveIndex: [] } as Partial<ChatDeps>),
 });

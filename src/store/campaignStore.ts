@@ -1,4 +1,4 @@
-import type { ArchiveChapter, Campaign, LoreChunk, GameContext, ChatMessage, CondenserState, NPCEntry, ArchiveIndexEntry, SemanticFact, BackupMeta } from '../types';
+import type { ArchiveChapter, Campaign, LoreChunk, GameContext, ChatMessage, CondenserState, NPCEntry, ArchiveIndexEntry, SemanticFact, EntityEntry, BackupMeta } from '../types';
 
 const API = '/api';
 
@@ -93,6 +93,12 @@ export async function loadArchiveIndex(campaignId: string): Promise<ArchiveIndex
 
 export async function loadSemanticFacts(campaignId: string): Promise<SemanticFact[]> {
     const res = await fetch(`${API}/campaigns/${campaignId}/facts`);
+    if (!res.ok) return [];
+    return res.json();
+}
+
+export async function loadEntities(campaignId: string): Promise<EntityEntry[]> {
+    const res = await fetch(`${API}/campaigns/${campaignId}/entities`);
     if (!res.ok) return [];
     return res.json();
 }

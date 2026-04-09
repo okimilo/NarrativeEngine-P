@@ -152,11 +152,13 @@ export function minifyNPC(npc: NPCEntry): string {
         ? (npc.appearance || '?').substring(0, 80) + '…'
         : (npc.appearance || '?');
 
-    const disposition = npc.disposition || '?';
-    const goals = npc.goals || '?';
-    const axes = `${npc.nature}/${npc.training}/${npc.emotion}/${npc.social}/${npc.belief}/${npc.ego}`;
+    const personality = (npc.personality || npc.disposition || '?').length > 60
+        ? (npc.personality || npc.disposition || '?').substring(0, 60) + '…'
+        : (npc.personality || npc.disposition || '?');
 
-    return `[${name}${aliases}] ${status} aff:${aff} | ${appearance} | ${disposition} | ${goals} | ${axes}`;
+    const goals = npc.goals || '?';
+
+    return `[${name}${aliases}] ${status} aff:${aff} | ${appearance} | ${personality} | ${goals}`;
 }
 
 /**

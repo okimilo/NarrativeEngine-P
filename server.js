@@ -47,9 +47,9 @@ function writeJson(filePath, data) {
 }
 
 function computeCampaignHash(id) {
-    const fileNames = [
+     const fileNames = [
         `${id}.json`, `${id}.state.json`, `${id}.lore.json`, `${id}.npcs.json`,
-        `${id}.archive.md`, `${id}.archive.index.json`, `${id}.archive.chapters.json`, `${id}.facts.json`,
+        `${id}.archive.md`, `${id}.archive.index.json`, `${id}.archive.chapters.json`, `${id}.facts.json`, `${id}.entities.json`,
     ];
     const hash = crypto.createHash('md5');
     for (const name of fileNames) {
@@ -62,9 +62,9 @@ function computeCampaignHash(id) {
 }
 
 function campaignFiles(id) {
-    const names = [
+     const names = [
         `${id}.json`, `${id}.state.json`, `${id}.lore.json`, `${id}.npcs.json`,
-        `${id}.archive.md`, `${id}.archive.index.json`, `${id}.archive.chapters.json`, `${id}.facts.json`,
+        `${id}.archive.md`, `${id}.archive.index.json`, `${id}.archive.chapters.json`, `${id}.facts.json`, `${id}.entities.json`,
     ];
     return names.filter(n => fs.existsSync(path.join(CAMPAIGNS_DIR, n)));
 }
@@ -392,6 +392,7 @@ app.delete('/api/campaigns/:id', (req, res) => {
         path.join(CAMPAIGNS_DIR, `${id}.archive.md`),
         path.join(CAMPAIGNS_DIR, `${id}.archive.index.json`),
         path.join(CAMPAIGNS_DIR, `${id}.facts.json`),
+        path.join(CAMPAIGNS_DIR, `${id}.entities.json`),
     ];
     for (const f of files) {
         if (fs.existsSync(f)) fs.unlinkSync(f);
@@ -470,6 +471,10 @@ function chaptersPath(id) {
 
 function factsPath(id) {
     return path.join(CAMPAIGNS_DIR, `${id}.facts.json`);
+}
+
+function entitiesPath(id) {
+    return path.join(CAMPAIGNS_DIR, `${id}.entities.json`);
 }
 
 function getNextSceneNumber(id) {
@@ -634,6 +639,223 @@ function extractNPCFacts(npcNames, text) {
     return facts;
 }
 
+function extractWitnessesHeuristic(npcNames, userContent, assistantContent) {
+    const witnesses = [];
+    const mentioned = [];
+
+    for (const name of npcNames) {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const dialoguePattern = new RegExp(
+            '\\[\\*{0,2}' + escaped + '\\*{0,2}\\]\\s*[^\\n]{10,}', 'i'
+        );
+        const addressedPattern = new RegExp(
+            '(?:talk to|ask|tell|speak with|confront|approach|address)\\s+' + escaped, 'i'
+        );
+
+        const hasDialogue = dialoguePattern.test(assistantContent);
+        const isAddressed = addressedPattern.test(userContent);
+
+        if (hasDialogue || isAddressed) {
+            witnesses.push(name);
+        } else {
+            mentioned.push(name);
+        }
+    }
+
+    return { witnesses, mentioned };
+}
+
+async function extractWitnessesLLM(npcNames, userContent, assistantContent, utilityConfig) {
+    if (!utilityConfig?.endpoint) return null;
+
+    const combinedText = `${userContent}\n${assistantContent}`.slice(0, 2000);
+
+    const prompt = `Given this RPG scene transcript and a list of NPCs mentioned, classify each NPC as either a WITNESS (physically present, actively participating, speaking, or directly addressed) or merely MENTIONED (talked about but not present).
+
+NPCs to classify: ${JSON.stringify(npcNames)}
+
+Scene:
+${combinedText}
+
+Respond ONLY with valid JSON:
+{
+  "witnesses": ["NPCs who were physically present/active"],
+  "mentioned": ["NPCs who were only talked about"]
+}`;
+
+    try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+
+        const response = await fetch(`${utilityConfig.endpoint}/chat/completions`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${utilityConfig.apiKey}`,
+            },
+            body: JSON.stringify({
+                model: utilityConfig.model,
+                messages: [{ role: 'user', content: prompt }],
+                temperature: 0.1,
+                stream: false,
+            }),
+            signal: controller.signal,
+        });
+
+        clearTimeout(timeout);
+        if (!response.ok) return null;
+
+        const data = await response.json();
+        const content = data.choices?.[0]?.message?.content || '';
+
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return null;
+
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (Array.isArray(parsed.witnesses) && Array.isArray(parsed.mentioned)) {
+            return parsed;
+        }
+        return null;
+    } catch (err) {
+        console.warn('[Witness Extraction] LLM failed:', err.message);
+        return null;
+    }
+}
+
+const FACT_PREDICATES = [
+    'killed_by', 'located_in', 'member_of', 'title', 'owns',
+    'knows_about', 'allied_with', 'enemy_of', 'created', 'sealed_in',
+    'possesses', 'related_to', 'owes', 'betrayed_by', 'protects',
+    'leads', 'follows', 'loves', 'hates', 'fears', 'stole_from',
+    'gave_to', 'imprisoned_by', 'hired_by', 'serves', 'quest_for'
+];
+
+function normalizeEntityName(name, knownEntities) {
+    const lower = name.toLowerCase().trim();
+
+    const exactMatch = knownEntities.find(
+        e => e.name.toLowerCase() === lower ||
+             e.aliases.some(a => a.toLowerCase() === lower)
+    );
+    if (exactMatch) return exactMatch.name;
+
+    const substringMatch = knownEntities.find(
+        e => lower.includes(e.name.toLowerCase()) ||
+             e.name.toLowerCase().includes(lower)
+    );
+    if (substringMatch) return substringMatch.name;
+
+    if (lower.length >= 3) {
+        const threshold = lower.length <= 6 ? 2 : 3;
+        for (const entity of knownEntities) {
+            const el = entity.name.toLowerCase();
+            if (Math.abs(el.length - lower.length) > threshold) continue;
+            if (levenshtein(el, lower) <= threshold) return entity.name;
+        }
+    }
+
+    return name;
+}
+
+function levenshtein(a, b) {
+    const matrix = [];
+    for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+    for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+    for (let i = 1; i <= b.length; i++) {
+        for (let j = 1; j <= a.length; j++) {
+            const cost = a[j - 1] === b[i - 1] ? 0 : 1;
+            matrix[i][j] = Math.min(
+                matrix[i - 1][j] + 1,
+                matrix[i][j - 1] + 1,
+                matrix[i - 1][j - 1] + cost
+            );
+        }
+    }
+    return matrix[b.length][a.length];
+}
+
+async function extractFactsLLM(entityNames, text, utilityConfig) {
+    if (!utilityConfig?.endpoint) return null;
+
+    const truncatedText = text.slice(0, 3000);
+
+    const prompt = `Extract entity-relationship triples from this RPG scene text.
+
+Known entities (use these canonical names when possible): ${JSON.stringify(entityNames)}
+
+Possible relationship types: ${FACT_PREDICATES.join(', ')}
+
+Scene text:
+${truncatedText}
+
+Rules:
+- Only extract clear, explicit relationships from the text
+- Use canonical entity names from the known entities list when possible
+- Set importance 1-10 (10 = death/major plot event, 1 = trivial detail)
+- Set confidence 0.0-1.0 for how certain you are about this relationship
+
+Respond ONLY with a JSON array:
+[
+  {"subject": "EntityName", "predicate": "relationship_type", "object": "EntityName", "importance": 7, "confidence": 0.9}
+]
+
+If no clear relationships exist, return empty array: []`;
+
+    let attempts = 0;
+    const maxAttempts = 2;
+
+    while (attempts < maxAttempts) {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 6000);
+
+            const response = await fetch(`${utilityConfig.endpoint}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${utilityConfig.apiKey}`,
+                },
+                body: JSON.stringify({
+                    model: utilityConfig.model,
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.1,
+                    stream: false,
+                }),
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeout);
+            if (!response.ok) { attempts++; continue; }
+
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content || '';
+
+            const jsonMatch = content.match(/\[[\s\S]*\]/);
+            if (!jsonMatch) { attempts++; continue; }
+
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (!Array.isArray(parsed)) { attempts++; continue; }
+
+            return parsed.filter(f =>
+                f.subject && f.predicate && f.object &&
+                typeof f.importance === 'number'
+            ).map(f => ({
+                subject: f.subject,
+                predicate: f.predicate,
+                object: f.object,
+                importance: Math.min(10, Math.max(1, f.importance)),
+                confidence: typeof f.confidence === 'number' ? Math.min(1, Math.max(0, f.confidence)) : 0.7,
+                source: 'llm',
+            }));
+        } catch (err) {
+            console.warn(`[Fact Extraction] LLM attempt ${attempts + 1} failed:`, err.message);
+            attempts++;
+        }
+    }
+
+    return null;
+}
+
 // Pre-assign next scene number — called by client BEFORE sending to AI
 app.get('/api/campaigns/:id/archive/next-scene', (req, res) => {
     const next = getNextSceneNumber(req.params.id);
@@ -645,7 +867,7 @@ app.get('/api/campaigns/:id/archive/next-scene', (req, res) => {
 app.post('/api/campaigns/:id/archive', (req, res) => {
     try {
     ensureDirs();
-    const { userContent, assistantContent } = req.body;
+    const { userContent, assistantContent, importance: clientImportance, utilityConfig } = req.body;
     const fp = archivePath(req.params.id);
     const idxp = archiveIndexPath(req.params.id);
     const sceneNum = getNextSceneNumber(req.params.id);
@@ -673,22 +895,57 @@ app.post('/api/campaigns/:id/archive', (req, res) => {
     const combinedText = `${userContent}\n${assistantContent}`;
     const keywords = extractIndexKeywords(combinedText);
     const npcNames = extractNPCNames(assistantContent);
+    let witnessResult = null;
+    if (utilityConfig?.endpoint && npcNames.length > 0) {
+        witnessResult = await extractWitnessesLLM(npcNames, userContent, assistantContent, utilityConfig);
+    }
+    const { witnesses, mentioned: npcOnlyMentioned } = witnessResult || extractWitnessesHeuristic(npcNames, userContent, assistantContent);
     const indexEntry = {
         sceneId,
         timestamp,
         keywords,
         keywordStrengths: extractKeywordStrengths(combinedText, keywords),
-        npcsMentioned: npcNames,
-        npcStrengths: extractNPCStrengths(assistantContent, npcNames),
-        importance: estimateImportance(combinedText),
+        npcsMentioned: npcOnlyMentioned,
+        witnesses,
+        npcStrengths: extractNPCStrengths(assistantContent, [...npcOnlyMentioned, ...witnesses]),
+        importance: (typeof clientImportance === 'number' && clientImportance >= 1 && clientImportance <= 10)
+            ? clientImportance
+            : estimateImportance(combinedText),
         userSnippet: userContent.slice(0, 120),
     };
     const existing = readJson(idxp, []);
     existing.push(indexEntry);
     writeJson(idxp, existing);
 
-    // Extract semantic facts and append to facts store
-    const newFacts = extractNPCFacts(npcNames, combinedText);
+    // Extract semantic facts (LLM with regex fallback) and append to facts store
+    const entitiesFile = entitiesPath(req.params.id);
+    const knownEntities = readJson(entitiesFile, []);
+    const allEntityNames = [
+        ...npcNames,
+        ...knownEntities.map(e => e.name),
+        ...knownEntities.flatMap(e => e.aliases)
+    ];
+    const uniqueEntityNames = [...new Set(allEntityNames.map(n => n.toLowerCase()))]
+        .map(lower => allEntityNames.find(n => n.toLowerCase() === lower) || lower);
+
+    let newFacts = null;
+    if (utilityConfig?.endpoint && npcNames.length > 0) {
+        newFacts = await extractFactsLLM(uniqueEntityNames, combinedText, utilityConfig);
+    }
+
+    if (newFacts === null) {
+        newFacts = extractNPCFacts(npcNames, combinedText).map(f => ({
+            ...f,
+            source: 'regex',
+            confidence: 1.0,
+        }));
+    } else {
+        for (const fact of newFacts) {
+            fact.subject = normalizeEntityName(fact.subject, knownEntities);
+            fact.object = normalizeEntityName(fact.object, knownEntities);
+        }
+    }
+
     if (newFacts.length > 0) {
         const factsFile = factsPath(req.params.id);
         const existingFacts = readJson(factsFile, []);
@@ -707,6 +964,31 @@ app.post('/api/campaigns/:id/archive', (req, res) => {
         }
         writeJson(factsFile, existingFacts);
     }
+
+    // Update entity registry
+    const updatedEntities = [...knownEntities];
+    for (const name of npcNames) {
+        const canonical = normalizeEntityName(name, updatedEntities);
+        if (canonical === name && !updatedEntities.some(e =>
+            e.name.toLowerCase() === name.toLowerCase()
+        )) {
+            updatedEntities.push({
+                id: `ent_${String(updatedEntities.length + 1).padStart(4, '0')}`,
+                name,
+                type: 'npc',
+                aliases: [],
+                firstSeen: sceneId,
+                factCount: 0,
+            });
+        }
+    }
+    const allFactsForCount = readJson(factsPath(req.params.id), []);
+    for (const entity of updatedEntities) {
+        entity.factCount = allFactsForCount.filter(f =>
+            f.subject === entity.name || f.object === entity.name
+        ).length;
+    }
+    writeJson(entitiesFile, updatedEntities);
 
     // --- NEW: Chapter Auto-Lifecycle ---
     const cp = chaptersPath(req.params.id);
@@ -1111,6 +1393,46 @@ app.put('/api/campaigns/:id/facts', (req, res) => {
     ensureDirs();
     writeJson(factsPath(req.params.id), req.body);
     res.json({ ok: true });
+});
+
+app.get('/api/campaigns/:id/entities', (req, res) => {
+    const entities = readJson(entitiesPath(req.params.id), []);
+    res.json(entities);
+});
+
+app.post('/api/campaigns/:id/entities/merge', (req, res) => {
+    try {
+        const { survivorId, consumedId } = req.body;
+        const fp = entitiesPath(req.params.id);
+        const entities = readJson(fp, []);
+
+        const survivor = entities.find(e => e.id === survivorId);
+        const consumed = entities.find(e => e.id === consumedId);
+        if (!survivor || !consumed) {
+            return res.status(404).json({ error: 'Entity not found' });
+        }
+
+        survivor.aliases = [...new Set([
+            ...survivor.aliases,
+            consumed.name,
+            ...consumed.aliases
+        ])];
+
+        const factsFile = factsPath(req.params.id);
+        const facts = readJson(factsFile, []);
+        for (const fact of facts) {
+            if (fact.subject === consumed.name) fact.subject = survivor.name;
+            if (fact.object === consumed.name) fact.object = survivor.name;
+        }
+        writeJson(factsFile, facts);
+
+        const updated = entities.filter(e => e.id !== consumedId);
+        writeJson(fp, updated);
+
+        res.json({ ok: true });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 // ═══════════════════════════════════════════

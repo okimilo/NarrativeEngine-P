@@ -33,7 +33,7 @@ export function NPCLedgerModal() {
     const importRef = useRef<HTMLInputElement>(null);
 
     const [form, setForm] = useState<Partial<NPCEntry>>({
-        status: 'Alive', nature: 5, training: 1, emotion: 5, social: 5, belief: 5, ego: 5,
+        status: 'Alive', voice: '', personality: '', exampleOutput: '',
         visualProfile: { ...DEFAULT_VISUAL_PROFILE }
     });
 
@@ -59,7 +59,7 @@ export function NPCLedgerModal() {
         setSelectedId(null);
         setForm({
             name: '', aliases: '', appearance: '', faction: '', storyRelevance: '', disposition: '',
-            status: 'Alive', goals: '', nature: 5, training: 1, emotion: 5, social: 5, belief: 5, ego: 5,
+            status: 'Alive', goals: '', voice: '', personality: '', exampleOutput: '',
             visualProfile: { ...DEFAULT_VISUAL_PROFILE }
         });
         setIsEditing(true);
@@ -137,9 +137,11 @@ export function NPCLedgerModal() {
                     aliases: entry.aliases || '', appearance: entry.appearance || '',
                     faction: entry.faction || '', storyRelevance: entry.storyRelevance || '',
                     disposition: entry.disposition || '', status: entry.status || 'Alive',
-                    goals: entry.goals || '', nature: entry.nature ?? 5, training: entry.training ?? 5,
-                    emotion: entry.emotion ?? 5, social: entry.social ?? 5, belief: entry.belief ?? 5,
-                    ego: entry.ego ?? 5, affinity: entry.affinity ?? 50,
+                    goals: entry.goals || '',
+                    voice: entry.voice ?? '',
+                    personality: entry.personality ?? entry.disposition ?? '',
+                    exampleOutput: entry.exampleOutput ?? '',
+                    affinity: entry.affinity ?? 50,
                 }));
                 addNPCs(imported);
                 alert(`Imported ${imported.length} NPC(s) successfully.`);

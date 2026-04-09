@@ -1,13 +1,13 @@
 import { useState } from 'react';
-import { Lock, Eye, EyeOff, Loader2, CheckCircle, Shield, KeyRound } from 'lucide-react';
+import { Lock, Eye, EyeOff, Loader2, Shield, KeyRound } from 'lucide-react';
 import { toast } from './Toast';
 
 interface VaultSetupModalProps {
-    existingPresets: { name: string; id: string; storyAI: any; imageAI: any; summarizerAI: any; utilityAI: any }[];
+    existingPresets: { name: string; id: string; storyAI: any; imageAI: any; summarizerAI: any; utilityAI?: any }[];
     onSetup: (password: string | null, remember: boolean) => Promise<boolean>;
 }
 
-export function VaultSetupModal({ existingPresets, onSetup }: VaultSetupModalProps) {
+export function VaultSetupModal({ onSetup }: VaultSetupModalProps) {
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);

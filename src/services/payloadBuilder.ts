@@ -1,7 +1,7 @@
-import type { AppSettings, ChatMessage, GameContext, LoreChunk, NPCEntry, ArchiveScene, PayloadTrace } from '../types';
+import type { AppSettings, ChatMessage, GameContext, LoreChunk, NPCEntry, ArchiveScene, ArchiveIndexEntry, PayloadTrace } from '../types';
 import type { OpenAIMessage } from './llmService';
 import { countTokens } from './tokenizer';
-import { buildBehaviorDirective, buildDriftAlert } from './npcBehaviorDirective';
+import { buildBehaviorDirective, buildDriftAlert, buildKnowledgeBoundary } from './npcBehaviorDirective';
 import { minifyLoreChunk, minifyNPC } from './contextMinifier';
 
 
@@ -51,7 +51,8 @@ export function buildPayload(
     archiveRecall?: ArchiveScene[],
     sceneNumber?: string,
     recommendedNPCNames?: string[],
-    semanticFactText?: string
+    semanticFactText?: string,
+    archiveIndex?: ArchiveIndexEntry[]
 ): { messages: OpenAIMessage[]; trace?: PayloadTrace[] } {
     const trace: PayloadTrace[] = [];
     const isDebug = settings.debugMode === true;
@@ -196,12 +197,15 @@ export function buildPayload(
 
         if (activeNPCs.length > 0) {
             const npcText = `[ACTIVE NPC CONTEXT]\n${activeNPCs.map(npc => {
-                // Minified base line (compact single-line format)
                 let line = minifyNPC(npc);
                 const directive = buildBehaviorDirective(npc);
                 if (directive) line += ` | ${directive}`;
                 const drift = buildDriftAlert(npc);
                 if (drift) line += ` | ${drift}`;
+                if (archiveIndex) {
+                    const boundary = buildKnowledgeBoundary(npc, archiveIndex);
+                    if (boundary) line += `\n  ${boundary}`;
+                }
                 return line;
             }).join('\n')}\n[END NPC CONTEXT]`;
             worldBlocks.push({ source: 'Active NPCs', content: npcText, tokens: countTokens(npcText), reason: `NPCs detected in context (${activeNPCs.length}, minified)` });
@@ -225,6 +229,13 @@ export function buildPayload(
     const volatileParts: string[] = [];
     if (context.characterProfileActive && context.characterProfile) volatileParts.push(`[CHARACTER PROFILE]\n${context.characterProfile}`);
     if (context.inventoryActive && context.inventory) volatileParts.push(`[PLAYER INVENTORY]\n${context.inventory}`);
+    if (context.notebookActive && context.notebook && context.notebook.length > 0) {
+        const noteLines = context.notebook
+            .sort((a, b) => b.timestamp - a.timestamp)
+            .slice(0, 50)
+            .map(n => `▸ ${n.text}`);
+        volatileParts.push(`[SCENE NOTEBOOK — Volatile Working Memory]\n${noteLines.join('\n')}\n[END NOTEBOOK]`);
+    }
 
     const volatileContent = volatileParts.join('\n\n');
     const volatileTokens = countTokens(volatileContent);
@@ -240,6 +251,7 @@ export function buildPayload(
         : history;
 
     const fitted: OpenAIMessage[] = [];
+    const fittedEphemeral: boolean[] = [];
     let historyUsed = 0;
     for (let i = candidateMessages.length - 1; i >= 0; i--) {
         const msg = candidateMessages[i];
@@ -256,7 +268,28 @@ export function buildPayload(
         if (msg.tool_call_id) openAIMsg.tool_call_id = msg.tool_call_id;
 
         fitted.unshift(openAIMsg);
+        fittedEphemeral.unshift(!!msg.ephemeral);
         historyUsed += cost;
+    }
+
+    let lastToolIdx = -1;
+    for (let i = fitted.length - 1; i >= 0; i--) {
+        if (fitted[i].role === 'tool') { lastToolIdx = i; break; }
+    }
+    let ephemeralSaved = 0;
+    for (let i = 0; i < fitted.length; i++) {
+        if (fittedEphemeral[i] && fitted[i].role === 'tool' && i !== lastToolIdx) {
+            const oldContent = fitted[i].content;
+            fitted[i].content = ' ';
+            if (typeof oldContent === 'string') {
+                const oldTokens = countTokens(oldContent);
+                historyUsed -= oldTokens;
+                ephemeralSaved += oldTokens;
+            }
+        }
+    }
+    if (ephemeralSaved > 0) {
+        addTrace({ source: 'Ephemeral Cleanup', classification: 'summary', tokens: ephemeralSaved, reason: `Reclaimed from stale tool results`, included: false, position: 'history' });
     }
 
     // Protect orphaned tools

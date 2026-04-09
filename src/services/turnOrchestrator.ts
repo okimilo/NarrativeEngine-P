@@ -8,6 +8,7 @@ import { queryFacts, formatFactsForContext } from './semanticMemory';
 import { rollEngines, rollDiceFairness } from './engineRolls';
 import { extractNPCNames, classifyNPCNames, validateNPCCandidates } from './npcDetector';
 import { api } from './apiClient';
+import { rateImportance } from './importanceRater';
 import { recommendContext } from './contextRecommender';
 import { toast } from '../components/Toast';
 import { useAppStore } from '../store/useAppStore';
@@ -261,7 +262,8 @@ export async function runTurn(
         archiveRecall,
         sceneNumber,
         recommendedNPCNames,
-        semanticFactText
+        semanticFactText,
+        archiveIndex
     );
 
     const payload = payloadResult.messages;
@@ -289,6 +291,31 @@ export async function runTurn(
                     type: 'object',
                     properties: { query: { type: 'string', description: 'The specific search query' } },
                     required: ['query']
+                }
+            }
+        }, {
+            type: 'function',
+            function: {
+                name: 'update_scene_notebook',
+                description: 'Update the scene notebook for tracking temporary state — active spells, timers, NPC positions, environmental conditions, combat state. Actions: add (create note), remove (delete by text match), clear (wipe all). Max 50 notes, max 5 actions per call. Use sparingly — only for volatile scene state that changes within a scene.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        actions: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                properties: {
+                                    op: { type: 'string', enum: ['add', 'remove', 'clear'] },
+                                    text: { type: 'string', description: 'Note text (ignored for clear op)' }
+                                },
+                                required: ['op']
+                            },
+                            description: 'Array of notebook actions to perform (max 5)',
+                            maxItems: 5
+                        }
+                    },
+                    required: ['actions']
                 }
             }
         }] : undefined;
@@ -336,7 +363,8 @@ export async function runTurn(
                         content: toolResult,
                         timestamp: Date.now(),
                         name: toolCall.name,
-                        tool_call_id: toolCall.id
+                        tool_call_id: toolCall.id,
+                        ephemeral: true
                     });
 
                     currentPayload.push({
@@ -353,6 +381,73 @@ export async function runTurn(
                     return;
                 }
 
+                if (toolCall && toolCall.name === 'update_scene_notebook') {
+                    callbacks.updateLastAssistant(finalText);
+
+                    callbacks.updateLastMessage({
+                        tool_calls: [{
+                            id: toolCall.id,
+                            type: 'function' as const,
+                            function: { name: toolCall.name, arguments: toolCall.arguments }
+                        }]
+                    });
+
+                    currentPayload.push({
+                        role: 'assistant',
+                        content: finalText || "",
+                        tool_calls: [{ id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: toolCall.arguments } }]
+                    } as unknown as import('./chatEngine').OpenAIMessage);
+
+                    let notebookActions: { op: string; text?: string }[] = [];
+                    try { notebookActions = JSON.parse(toolCall.arguments).actions || []; } catch { /* Ignore */ }
+
+                    const currentNotebook = [...state.context.notebook];
+                    let opsCount = 0;
+                    const MAX_NOTEBOOK_OPS = 5;
+                    const MAX_NOTEBOOK_NOTES = 50;
+
+                    for (const action of notebookActions) {
+                        if (opsCount >= MAX_NOTEBOOK_OPS) break;
+                        if (action.op === 'add' && action.text && currentNotebook.length < MAX_NOTEBOOK_NOTES) {
+                            currentNotebook.push({ id: uid(), text: action.text.trim(), timestamp: Date.now() });
+                        } else if (action.op === 'remove' && action.text) {
+                            const searchLower = action.text.toLowerCase().trim();
+                            const idx = currentNotebook.findIndex(n => n.text.toLowerCase().includes(searchLower));
+                            if (idx !== -1) currentNotebook.splice(idx, 1);
+                        } else if (action.op === 'clear') {
+                            currentNotebook.length = 0;
+                        }
+                        opsCount++;
+                    }
+
+                    callbacks.updateContext({ notebook: currentNotebook });
+                    console.log(`[Notebook] Updated: ${currentNotebook.length} notes active (${opsCount} ops)`);
+
+                    const toolResult = `Notebook updated. ${currentNotebook.length} notes active.`;
+                    const toolMsgId = uid();
+                    callbacks.addMessage({
+                        id: toolMsgId,
+                        role: 'tool' as const,
+                        content: toolResult,
+                        timestamp: Date.now(),
+                        name: toolCall.name,
+                        tool_call_id: toolCall.id,
+                        ephemeral: true
+                    });
+
+                    currentPayload.push({
+                        role: 'tool',
+                        content: toolResult,
+                        name: toolCall.name,
+                        tool_call_id: toolCall.id
+                    } as unknown as import('./chatEngine').OpenAIMessage);
+
+                    setTimeout(() => {
+                        executeTurn(currentPayload, toolCallCount + 1);
+                    }, 800);
+                    return;
+                }
+
                 callbacks.setStreaming(false);
                 callbacks.onCheckingNotes(false);
                 callbacks.updateLastAssistant(finalText);
@@ -361,7 +456,18 @@ export async function runTurn(
                 const lastAssistant = allMsgs[allMsgs.length - 1];
                 
                 if (lastAssistant?.role === 'assistant' && lastAssistant.content && activeCampaignId) {
-                    const appendData = await api.archive.append(activeCampaignId, displayInput, lastAssistant.content);
+                    let sceneImportance: number | undefined;
+                    const importanceProvider = state.getFreshProvider();
+                    if (importanceProvider) {
+                        try {
+                            sceneImportance = await rateImportance(importanceProvider, displayInput, lastAssistant.content, allMsgs);
+                            console.log(`[ImportanceRater] Scene rated: ${sceneImportance}/5`);
+                        } catch (err) {
+                            console.warn('[ImportanceRater] Failed (non-fatal):', err);
+                        }
+                    }
+
+                    const appendData = await api.archive.append(activeCampaignId, displayInput, lastAssistant.content, sceneImportance);
                     const appendedSceneId = appendData?.sceneId;
                     if (appendData) {
                         const freshIndex = await api.archive.getIndex(activeCampaignId);
@@ -549,7 +655,7 @@ async function generateAIPlayerAction(
 
     const npcContext = relevantNPCs.length > 0 
         ? "\n\nRELEVANT NPCs IN SCENE:\n" + relevantNPCs.map(n => 
-            `- ${n.name} (Status: ${n.status}) | Goals: ${n.goals} | Stats: N:${n.nature} T:${n.training} E:${n.emotion} S:${n.social} B:${n.belief} G:${n.ego}`
+            `- ${n.name} (Status: ${n.status}) | Goals: ${n.goals} | Personality: ${n.personality || n.disposition || 'Unknown'}${n.voice ? ' | Voice: ' + n.voice : ''}`
           ).join('\n')
         : "";
 

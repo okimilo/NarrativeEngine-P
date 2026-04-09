@@ -438,7 +438,7 @@ describe('rankChapters', () => {
             createChapter('CH01', ['001', '010'], Date.now(), 'chapter', [], ['Gandalf']),
         ];
         
-        const npcLedger = [{ id: '1', name: 'Gandalf', aliases: '', appearance: '', faction: '', storyRelevance: '', disposition: '', status: '', goals: '', nature: 5, training: 5, emotion: 5, social: 5, belief: 5, ego: 5, affinity: 50 }];
+        const npcLedger = [{ id: '1', name: 'Gandalf', aliases: '', appearance: '', faction: '', storyRelevance: '', disposition: '', status: '', goals: '', voice: '', personality: '', exampleOutput: '', affinity: 50 }];
         
         const result = rankChapters(chapters, 'test', [], npcLedger);
         
@@ -453,6 +453,7 @@ describe('sceneRanges filtering', () => {
         timestamp: Date.now(),
         keywords: ['test'],
         npcsMentioned: [],
+        witnesses: [],
         userSnippet: 'test',
         keywordStrengths: {},
         npcStrengths: {},
@@ -822,6 +823,7 @@ describe('recallWithChapterFunnel', () => {
         timestamp: Date.now(),
         keywords: ['dragon', 'castle'],
         npcsMentioned: ['Gandalf'],
+        witnesses: [],
         userSnippet: 'test',
         keywordStrengths: { dragon: 1.0 },
         npcStrengths: {},

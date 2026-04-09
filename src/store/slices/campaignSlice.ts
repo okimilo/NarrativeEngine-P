@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand';
-import type { ArchiveChapter, ChatMessage, CondenserState, GameContext, LoreChunk, ArchiveIndexEntry, NPCEntry, SemanticFact } from '../../types';
+import type { ArchiveChapter, ChatMessage, CondenserState, GameContext, LoreChunk, ArchiveIndexEntry, NPCEntry, SemanticFact, EntityEntry } from '../../types';
 import { toast } from '../../components/Toast';
 import { debouncedSaveSettings } from './settingsSlice';
 import {
@@ -189,6 +189,8 @@ export const defaultContext: GameContext = {
     neutralCooldown: 2,
     allyCooldown: 2,
     interventionQueue: [],
+    notebook: [],
+    notebookActive: true,
     worldEventConfig: {
         initialDC: 498,
         dcReduction: 2,
@@ -219,6 +221,8 @@ export type CampaignSlice = {
     removeNPC: (id: string) => void;
     semanticFacts: SemanticFact[];
     setSemanticFacts: (facts: SemanticFact[]) => void;
+    entities: EntityEntry[];
+    setEntities: (entities: EntityEntry[]) => void;
 
     context: GameContext;
     updateContext: (patch: Partial<GameContext>) => void;
@@ -245,6 +249,22 @@ export const createCampaignSlice: StateCreator<CampaignDeps, [], [], CampaignSli
     return {
     activeCampaignId: null,
     setActiveCampaign: (id) => {
+        // Flush any pending campaign state save for the OLD campaign before switching.
+        // Without this, the timer fires after state is overwritten by the new campaign's
+        // data and writes the new campaign's state into the old campaign's save slot.
+        if (stateTimer && _getStateForSave) {
+            clearTimeout(stateTimer);
+            stateTimer = null;
+            const { activeCampaignId: oldId, context, messages, condenser } = _getStateForSave();
+            if (oldId && oldId !== id) {
+                fetch(`${API}/campaigns/${oldId}/state`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ context, messages, condenser }),
+                }).catch((e) => { console.error('[CampaignSwitch] Flush save failed:', e); });
+            }
+        }
+
         if (autoBackupTimer) {
             clearInterval(autoBackupTimer);
             autoBackupTimer = null;
@@ -321,8 +341,9 @@ export const createCampaignSlice: StateCreator<CampaignDeps, [], [], CampaignSli
         return { npcLedger: newLedger };
     }),
     semanticFacts: [],
-    // Read-only hydration setter — facts are derived server-side from archive. No client persistence needed.
     setSemanticFacts: (facts) => set({ semanticFacts: facts } as Partial<CampaignDeps>),
+    entities: [],
+    setEntities: (entities) => set({ entities } as Partial<CampaignDeps>),
 
     context: { ...defaultContext },
     updateContext: (patch) =>
