@@ -58,6 +58,11 @@ const sanitizePayloadForApi = (rawPayload: any[], allowTools: boolean) => {
 
         if (msg.role === 'assistant') {
             if (!allowTools || !Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) {
+                if (allowTools && Array.isArray(msg.tool_calls)) {
+                    console.warn('[Payload] Stripped empty tool_calls from assistant message');
+                } else if (!allowTools && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+                    console.warn('[Payload] Stripped tool_calls from assistant message (tools disabled)');
+                }
                 const { tool_calls, ...assistantNoTools } = msg;
                 cleaned.push(assistantNoTools);
                 continue;
@@ -69,6 +74,7 @@ const sanitizePayloadForApi = (rawPayload: any[], allowTools: boolean) => {
             );
 
             if (validCalls.length === 0) {
+                console.warn('[Payload] All tool_calls invalid for assistant message, stripping', msg.tool_calls?.length, 'calls');
                 const { tool_calls, ...assistantNoTools } = msg;
                 cleaned.push(assistantNoTools);
                 continue;

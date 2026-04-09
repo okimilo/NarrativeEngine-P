@@ -26,6 +26,22 @@ function ensureDirs() {
 }
 ensureDirs();
 
+// Auto-initialize vault with machine key if it doesn't exist
+if (!vault.exists()) {
+    vault.create({ presets: [] }, null);
+    console.log('[Vault] Auto-created with machine key');
+}
+// Auto-unlock machine-key vaults on startup
+if (!vault.isUnlocked()) {
+    try {
+        vault.unlock(null);
+        console.log('[Vault] Auto-unlocked with machine key');
+    } catch (e) {
+        // Password-protected vault — frontend will prompt for password
+        console.log('[Vault] Password-protected vault, manual unlock required');
+    }
+}
+
 // ─── Helpers ───
 function readJson(filePath, fallback = null) {
     try {
@@ -864,7 +880,7 @@ app.get('/api/campaigns/:id/archive/next-scene', (req, res) => {
 });
 
 // Append a scene (user + assistant exchange) — also writes index entry
-app.post('/api/campaigns/:id/archive', (req, res) => {
+app.post('/api/campaigns/:id/archive', async (req, res) => {
     try {
     ensureDirs();
     const { userContent, assistantContent, importance: clientImportance, utilityConfig } = req.body;

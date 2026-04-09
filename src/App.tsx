@@ -11,7 +11,6 @@ import { BackupModal } from './components/BackupModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastContainer } from './components/Toast';
 import { VaultUnlockModal } from './components/VaultUnlockModal';
-import { VaultSetupModal } from './components/VaultSetupModal';
 import {
   loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex, loadSemanticFacts, loadChapters, loadEntities,
 } from './store/campaignStore';
@@ -25,9 +24,7 @@ export default function App() {
   const vaultStatus = useAppStore((s) => s.vaultStatus);
   const checkVaultStatus = useAppStore((s) => s.checkVaultStatus);
   const unlockVaultWithRemembered = useAppStore((s) => s.unlockVaultWithRemembered);
-  const setupVault = useAppStore((s) => s.setupVault);
   const unlockVault = useAppStore((s) => s.unlockVault);
-  const settings = useAppStore((s) => s.settings);
 
   // True once campaign state has been hydrated into Zustand (or there's no campaign to hydrate)
   const [campaignLoaded, setCampaignLoaded] = useState(false);
@@ -111,20 +108,6 @@ export default function App() {
     return (
       <div className="flex items-center justify-center h-screen bg-gray-950 text-gray-400">
         <div className="text-lg animate-pulse">Loading…</div>
-      </div>
-    );
-  }
-
-  // Show vault setup if vault doesn't exist yet
-  if (vaultStatus && !vaultStatus.exists) {
-    return (
-      <div className="min-h-screen bg-void">
-        <VaultSetupModal
-          existingPresets={settings.presets}
-          onSetup={async (password, remember) => {
-            return await setupVault(password, remember);
-          }}
-        />
       </div>
     );
   }

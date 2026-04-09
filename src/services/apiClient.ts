@@ -1,4 +1,4 @@
-import type { AppSettings, ArchiveChapter, ArchiveIndexEntry, ChatMessage, CondenserState, GameContext, NPCEntry, SemanticFact, EntityEntry, BackupMeta } from '../types';
+import type { AppSettings, ArchiveChapter, ArchiveIndexEntry, SemanticFact, EntityEntry, BackupMeta } from '../types';
 
 const API = '/api';
 
@@ -158,24 +158,7 @@ export const api = {
             }
         },
     },
-    campaigns: {
-        async saveState(campaignId: string, state: { context: GameContext; messages: ChatMessage[]; condenser: CondenserState }): Promise<void> {
-            const res = await fetch(`${API}/campaigns/${campaignId}/state`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(state),
-            });
-            if (!res.ok) console.warn('[State] Failed to save campaign state:', res.status);
-        },
-        async saveNPCs(campaignId: string, npcs: NPCEntry[]): Promise<void> {
-            const res = await fetch(`${API}/campaigns/${campaignId}/npcs`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(npcs),
-            });
-            if (!res.ok) console.warn('[NPCs] Failed to save NPC ledger:', res.status);
-        }
-    },
+    campaigns: {} as Record<string, never>,
     settings: {
         async get(): Promise<any> {
             const res = await fetch(`${API}/settings`);

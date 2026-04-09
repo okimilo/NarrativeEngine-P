@@ -156,8 +156,12 @@ export class KeyVault {
     unlock(password) {
         const encrypted = fs.readFileSync(this.vaultPath);
         
-        // Check if this is password-protected (has salt at end) or machine-key
-        const hasSalt = encrypted.length > MAGIC.length + 4 + IV_LENGTH + TAG_LENGTH + SALT_LENGTH;
+        // Check if this is password-protected (has salt at end) or machine-key.
+        // Use the stored ciphertext length to compute exact expected sizes:
+        // machine-key: MAGIC(4)+len(4)+IV(12)+cipher(N)+tag(16) = 36+N
+        // password:    same + SALT_LENGTH(16) at end             = 52+N
+        const ciphertextLength = encrypted.readUInt32BE(4);
+        const hasSalt = encrypted.length === (4 + 4 + IV_LENGTH + ciphertextLength + TAG_LENGTH + SALT_LENGTH);
         
         if (hasSalt) {
             // Extract salt from end
