@@ -1,8 +1,9 @@
-import type { AppSettings, ChatMessage, GameContext, LoreChunk, NPCEntry, ArchiveScene, ArchiveIndexEntry, PayloadTrace } from '../types';
+import type { AppSettings, ChatMessage, GameContext, LoreChunk, NPCEntry, ArchiveScene, ArchiveIndexEntry, PayloadTrace, TimelineEvent } from '../types';
 import type { OpenAIMessage } from './llmService';
 import { countTokens } from './tokenizer';
 import { buildBehaviorDirective, buildDriftAlert, buildKnowledgeBoundary } from './npcBehaviorDirective';
 import { minifyLoreChunk, minifyNPC } from './contextMinifier';
+import { resolveTimeline, formatResolvedForContext } from './timelineResolver';
 
 
 /**
@@ -52,7 +53,8 @@ export function buildPayload(
     sceneNumber?: string,
     recommendedNPCNames?: string[],
     semanticFactText?: string,
-    archiveIndex?: ArchiveIndexEntry[]
+    archiveIndex?: ArchiveIndexEntry[],
+    timelineEvents?: TimelineEvent[]
 ): { messages: OpenAIMessage[]; trace?: PayloadTrace[] } {
     const trace: PayloadTrace[] = [];
     const isDebug = settings.debugMode === true;
@@ -75,7 +77,7 @@ export function buildPayload(
 
     // --- 2. Calculate Stable Truth & Summary (High Priority) ---
     const stableParts: string[] = [];
-    if (sceneNumber) stableParts.push(`[CURRENT SCENE: #${sceneNumber}]`);
+    if (sceneNumber) stableParts.push(`[CURRENT SCENE: #${sceneNumber}]\n[ENGINE: Scene header is auto-injected. Do NOT write "Scene #${sceneNumber}" yourself. Start your response with the date/location/NPCs line directly.]`);
     if (context.rulesRaw) stableParts.push(context.rulesRaw);
     if (context.canonStateActive && context.canonState) {
         stableParts.push(context.canonState);
@@ -157,14 +159,18 @@ export function buildPayload(
         worldBlocks.push({ source: 'Raw Lore (Legacy)', content: context.loreRaw, tokens: countTokens(context.loreRaw), reason: 'Legacy fallback' });
     }
 
-    // Semantic Memory Facts
-    if (semanticFactText) {
-        worldBlocks.push({
-            source: 'Semantic Memory',
-            content: semanticFactText,
-            tokens: countTokens(semanticFactText),
-            reason: 'Entity-matched facts from semantic store'
-        });
+    // Resolved World State (Timeline)
+    if (timelineEvents && timelineEvents.length > 0) {
+        const resolved = resolveTimeline(timelineEvents);
+        if (resolved.length > 0) {
+            const resolvedText = formatResolvedForContext(resolved);
+            worldBlocks.push({
+                source: 'Resolved World State',
+                content: resolvedText,
+                tokens: countTokens(resolvedText),
+                reason: `Timeline resolution: ${resolved.length} active truths from ${timelineEvents.length} events`
+            });
+        }
     }
 
     // Active NPCs

@@ -1,10 +1,10 @@
-import type { AppSettings, GameContext, ChatMessage, NPCEntry, LoreChunk, CondenserState, ArchiveIndexEntry, ArchiveScene, SemanticFact, EndpointConfig, ProviderConfig } from '../types';
+import type { AppSettings, GameContext, ChatMessage, NPCEntry, LoreChunk, CondenserState, ArchiveIndexEntry, ArchiveScene, TimelineEvent, EndpointConfig, ProviderConfig } from '../types';
 import { uid } from '../utils/uid';
+import { API_BASE as API } from '../lib/apiBase';
 import { buildPayload, sendMessage, generateNPCProfile, updateExistingNPCs } from './chatEngine';
 import { retrieveRelevantLore, searchLoreByQuery } from './loreRetriever';
 import { recallArchiveScenes, retrieveArchiveMemory, fetchArchiveScenes } from './archiveMemory';
 import { rankChapters, recallWithChapterFunnel } from './archiveChapterEngine';
-import { queryFacts, formatFactsForContext } from './semanticMemory';
 import { rollEngines, rollDiceFairness } from './engineRolls';
 import { extractNPCNames, classifyNPCNames, validateNPCCandidates } from './npcDetector';
 import { api } from './apiClient';
@@ -20,7 +20,7 @@ export type TurnCallbacks = {
     updateLastMessage: (patch: Partial<ChatMessage>) => void;
     updateContext: (patch: Partial<GameContext>) => void;
     setArchiveIndex: (entries: ArchiveIndexEntry[]) => void;
-    setSemanticFacts?: (facts: SemanticFact[]) => void;
+    setTimeline?: (events: TimelineEvent[]) => void;
     updateNPC: (id: string, patch: Partial<NPCEntry>) => void;
     addNPC: (npc: NPCEntry) => void;
     setCondensed: (summary: string, upToIndex: number) => void;
@@ -46,7 +46,7 @@ export type TurnState = {
     getFreshProvider: () => EndpointConfig | ProviderConfig | undefined;
     getUtilityEndpoint?: () => EndpointConfig | undefined; // optional — context recommender
     forcedInterventions?: ('enemy' | 'neutral' | 'ally')[]; // For manual triggers from UI
-    semanticFacts?: SemanticFact[];
+    timeline?: TimelineEvent[];
 };
 
 const sanitizePayloadForApi = (rawPayload: any[], allowTools: boolean) => {
@@ -145,7 +145,7 @@ export async function runTurn(
     let archiveRecall: ArchiveScene[] | undefined;
     let recommendedNPCNames: string[] | undefined;
 
-    const timelinePromise = activeCampaignId ? fetch(`/api/campaigns/${activeCampaignId}/archive/next-scene`)
+    const timelinePromise = activeCampaignId ? fetch(`${API}/campaigns/${activeCampaignId}/archive/next-scene`)
         .then(async res => {
             if (res.ok) {
                 const snData = await res.json();
@@ -177,7 +177,7 @@ export async function runTurn(
             
             // Stage 2: LLM validation with 3s timeout
             const utilityConfig = state.getUtilityEndpoint?.();
-            const FUNNEL_TIMEOUT_MS = 3000;
+            const FUNNEL_TIMEOUT_MS = 8000;
             
             const funnelPromise = recallWithChapterFunnel(
                 chapters, archiveIndex, input, messages,
@@ -231,24 +231,14 @@ export async function runTurn(
         console.warn('[TurnOrchestrator] UtilityAI recommender failed:', err);
     }) : Promise.resolve();
 
-    // Semantic facts query — runs synchronously but wrapped as promise for consistency
-    let semanticFactText: string | undefined;
-    const factsPromise = Promise.resolve().then(() => {
-        const facts = queryFacts(
-            state.semanticFacts || [],
-            input,
-            messages,
-            npcLedger,
-            500
-        );
-        semanticFactText = formatFactsForContext(facts);
-    });
+    // Timeline events — already in state from last load; used directly in buildPayload
+    const timelineEvents: TimelineEvent[] = state.timeline || [];
 
     // Await all async operations simultaneously, with a 10s safety timeout.
     // If any individual operation hangs, we proceed with whatever completed rather than blocking indefinitely.
-    const CONTEXT_GATHER_TIMEOUT_MS = 10_000;
+    const CONTEXT_GATHER_TIMEOUT_MS = 15_000;
     await Promise.race([
-        Promise.all([timelinePromise, archivePromise, recommenderPromise, factsPromise]),
+        Promise.all([timelinePromise, archivePromise, recommenderPromise]),
         new Promise<void>((resolve) => setTimeout(() => {
             console.warn('[TurnOrchestrator] Context gather timeout (10s) — proceeding with partial results');
             resolve();
@@ -268,8 +258,9 @@ export async function runTurn(
         archiveRecall,
         sceneNumber,
         recommendedNPCNames,
-        semanticFactText,
-        archiveIndex
+        undefined,      // semanticFactText — deprecated, replaced by timelineEvents
+        archiveIndex,
+        timelineEvents
     );
 
     const payload = payloadResult.messages;
@@ -277,8 +268,13 @@ export async function runTurn(
         callbacks.setLastPayloadTrace(payloadResult.trace);
     }
     
-    // Attach the debug payload to the user message we added earlier
-    callbacks.updateLastMessage({ debugPayload: payload });
+    // Attach the debug payload to the user message we added earlier (memory-only, never persisted)
+    if (settings.debugMode) {
+        callbacks.updateLastMessage({ debugPayload: payload });
+    }
+
+    const stripLLMSceneHeader = (text: string): string =>
+        text.replace(/^Scene\s*#\d+\s*\|?\s*/i, '');
 
     const executeTurn = async (currentPayload: any[], toolCallCount = 0, apiRetryCount = 0) => {
         const assistantMsgId = uid();
@@ -330,7 +326,9 @@ export async function runTurn(
         await sendMessage(
             provider,
             requestPayload,
-            (fullText) => callbacks.updateLastAssistant(fullText),
+            (fullText) => callbacks.updateLastAssistant(
+                sceneNumber ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(fullText)}` : fullText
+            ),
             async (finalText, toolCall) => {
                 if (toolCall && toolCall.name === 'query_campaign_lore') {
                     callbacks.onCheckingNotes(true);
@@ -456,7 +454,10 @@ export async function runTurn(
 
                 callbacks.setStreaming(false);
                 callbacks.onCheckingNotes(false);
-                callbacks.updateLastAssistant(finalText);
+                const engineText = sceneNumber
+                    ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(finalText)}`
+                    : finalText;
+                callbacks.updateLastAssistant(engineText);
                 
                 const allMsgs = state.getMessages();
                 const lastAssistant = allMsgs[allMsgs.length - 1];
@@ -478,8 +479,8 @@ export async function runTurn(
                     if (appendData) {
                         const freshIndex = await api.archive.getIndex(activeCampaignId);
                         callbacks.setArchiveIndex(freshIndex);
-                        const freshFacts = await api.facts.get(activeCampaignId);
-                        callbacks.setSemanticFacts?.(freshFacts);
+                        const freshTimeline = await api.timeline.get(activeCampaignId);
+                        callbacks.setTimeline?.(freshTimeline);
                         console.log(`[Archive] Appended scene #${appendedSceneId}`);
                     }
 

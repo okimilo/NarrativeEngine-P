@@ -238,7 +238,7 @@ async function validateChapterRelevance(
 
     // 3s timeout per validation call — matches the outer FUNNEL_TIMEOUT_MS in turnOrchestrator
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
     try {
         const url = `${provider.endpoint.replace(/\/+$/, '')}/chat/completions`;

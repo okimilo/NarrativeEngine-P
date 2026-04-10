@@ -1,5 +1,6 @@
 import type { ArchiveIndexEntry, ArchiveScene, ChatMessage, NPCEntry } from '../types';
 import { countTokens } from './tokenizer';
+import { API_BASE as API } from '../lib/apiBase';
 
 /**
  * archiveMemory.ts
@@ -255,7 +256,7 @@ export async function fetchArchiveScenes(
 
     try {
         const idsParam = sceneIds.join(',');
-        const res = await fetch(`/api/campaigns/${campaignId}/archive/scenes?ids=${idsParam}`);
+        const res = await fetch(`${API}/campaigns/${campaignId}/archive/scenes?ids=${idsParam}`);
         if (!res.ok) {
             console.warn('[Archive Retrieval] Failed to fetch scenes:', res.status);
             return [];

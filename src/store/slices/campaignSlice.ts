@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand';
-import type { ArchiveChapter, ChatMessage, CondenserState, GameContext, LoreChunk, ArchiveIndexEntry, NPCEntry, SemanticFact, EntityEntry } from '../../types';
+import type { ArchiveChapter, ChatMessage, CondenserState, GameContext, LoreChunk, ArchiveIndexEntry, NPCEntry, SemanticFact, EntityEntry, TimelineEvent } from '../../types';
 import { toast } from '../../components/Toast';
 import { debouncedSaveSettings } from './settingsSlice';
 import {
@@ -8,7 +8,7 @@ import {
     DEFAULT_WORLD_WHO, DEFAULT_WORLD_WHERE, DEFAULT_WORLD_WHY, DEFAULT_WORLD_WHAT,
 } from './settingsSlice';
 
-const API = '/api';
+import { API_BASE as API } from '../../lib/apiBase';
 
 let autoBackupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -34,6 +34,12 @@ export function _registerCampaignStateGetter(
 }
 
 let stateTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function cancelPendingSaves() {
+    if (stateTimer) { clearTimeout(stateTimer); stateTimer = null; }
+    if (loreTimer)  { clearTimeout(loreTimer);  loreTimer  = null; }
+    if (npcTimer)   { clearTimeout(npcTimer);   npcTimer   = null; }
+}
 /** Debounced campaign state save. Always reads fresh state at fire time (no stale closures). */
 export function debouncedSaveCampaignState() {
     if (stateTimer) clearTimeout(stateTimer);
@@ -221,6 +227,10 @@ export type CampaignSlice = {
     removeNPC: (id: string) => void;
     semanticFacts: SemanticFact[];
     setSemanticFacts: (facts: SemanticFact[]) => void;
+    timeline: TimelineEvent[];
+    setTimeline: (events: TimelineEvent[]) => void;
+    addTimelineEvent: (event: TimelineEvent) => void;
+    removeTimelineEvent: (eventId: string) => void;
     entities: EntityEntry[];
     setEntities: (entities: EntityEntry[]) => void;
 
@@ -342,6 +352,10 @@ export const createCampaignSlice: StateCreator<CampaignDeps, [], [], CampaignSli
     }),
     semanticFacts: [],
     setSemanticFacts: (facts) => set({ semanticFacts: facts } as Partial<CampaignDeps>),
+    timeline: [],
+    setTimeline: (events) => set({ timeline: events } as Partial<CampaignDeps>),
+    addTimelineEvent: (event) => set((s) => ({ timeline: [...s.timeline, event] } as Partial<CampaignDeps>)),
+    removeTimelineEvent: (eventId) => set((s) => ({ timeline: s.timeline.filter(e => e.id !== eventId) } as Partial<CampaignDeps>)),
     entities: [],
     setEntities: (entities) => set({ entities } as Partial<CampaignDeps>),
 

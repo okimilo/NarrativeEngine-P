@@ -8,6 +8,7 @@ import { condenseHistory, shouldCondense } from '../services/condenser';
 import { runSaveFilePipeline, generateChapterSummary } from '../services/saveFileEngine';
 import { runTurn } from '../services/turnOrchestrator';
 import { api } from '../services/apiClient';
+import { API_BASE as API } from '../lib/apiBase';
 import { set } from 'idb-keyval';
 import { toast } from './Toast';
 import { shouldAutoSeal } from '../services/archiveChapterEngine';
@@ -34,7 +35,7 @@ export function ChatArea() {
     const {
         setArchiveIndex, clearArchive, updateLastAssistant, updateContext,
         setCondensed, setCondensing, deleteMessage, deleteMessagesFrom,
-        resetCondenser, setSemanticFacts, setChapters,
+        resetCondenser, setTimeline, setChapters,
     } = useAppStore(
         useShallow(s => ({
             setArchiveIndex: s.setArchiveIndex,
@@ -46,7 +47,7 @@ export function ChatArea() {
             deleteMessage: s.deleteMessage,
             deleteMessagesFrom: s.deleteMessagesFrom,
             resetCondenser: s.resetCondenser,
-            setSemanticFacts: s.setSemanticFacts,
+            setTimeline: s.setTimeline,
             setChapters: s.setChapters,
         }))
     );
@@ -149,12 +150,12 @@ export function ChatArea() {
 
             if (campaignId) {
                 setLoadingStatus('Refreshing indices...');
-                const [fresh, freshFacts] = await Promise.all([
+                const [fresh, freshTimeline] = await Promise.all([
                     api.archive.getIndex(campaignId),
-                    api.facts.get(campaignId)
+                    api.timeline.get(campaignId)
                 ]);
                 setArchiveIndex(fresh);
-                setSemanticFacts(freshFacts);
+                setTimeline(freshTimeline);
                 console.log(`[Archive] Reloaded index: ${fresh.length} entries`);
             }
         } catch (err) {
@@ -217,7 +218,8 @@ export function ChatArea() {
             provider: storeSnapshot.getActiveStoryEndpoint(),
             getMessages: () => useAppStore.getState().messages,
             getFreshProvider: () => useAppStore.getState().getActiveStoryEndpoint(),
-            getUtilityEndpoint: () => useAppStore.getState().getActiveUtilityEndpoint()
+            getUtilityEndpoint: () => useAppStore.getState().getActiveUtilityEndpoint(),
+            timeline: storeSnapshot.timeline,
         }, {
             onCheckingNotes: setIsCheckingNotes,
             addMessage: storeSnapshot.addMessage,
@@ -225,7 +227,7 @@ export function ChatArea() {
             updateLastMessage: storeSnapshot.updateLastMessage,
             updateContext: updateContext,
             setArchiveIndex: setArchiveIndex,
-            setSemanticFacts: setSemanticFacts,
+            setTimeline: setTimeline,
             updateNPC: storeSnapshot.updateNPC,
             addNPC: storeSnapshot.addNPC,
             setCondensed: setCondensed,
@@ -421,7 +423,7 @@ export function ChatArea() {
         if (!target) return;
 
         try {
-            await fetch('/api/campaigns/' + campaignId + '/backup', {
+            await fetch(`${API}/campaigns/${campaignId}/backup`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ trigger: 'pre-rollback', isAuto: true }),
@@ -434,14 +436,14 @@ export function ChatArea() {
             await api.archive.deleteFrom(campaignId, target.sceneId);
             
             // Refresh all dependent state
-            const [freshIndex, freshFacts, freshChapters] = await Promise.all([
+            const [freshIndex, freshTimeline, freshChapters] = await Promise.all([
                 api.archive.getIndex(campaignId),
-                api.facts.get(campaignId),
+                api.timeline.get(campaignId),
                 api.chapters.list(campaignId)
             ]);
-            
+
             setArchiveIndex(freshIndex);
-            setSemanticFacts(freshFacts);
+            setTimeline(freshTimeline);
             
             // Check if chapters were affected (count or scene ranges changed)
             const chaptersChanged = freshChapters.length !== currentChapters.length ||
@@ -487,7 +489,7 @@ export function ChatArea() {
 
     const handleClearArchive = async () => {
         if (!activeCampaignId || !window.confirm('Are you sure you want to PERMANENTLY delete the entire archive? This cannot be undone.')) return;
-        await fetch('/api/campaigns/' + activeCampaignId + '/backup', {
+        await fetch(`${API}/campaigns/${activeCampaignId}/backup`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ trigger: 'pre-clear-archive', isAuto: true }),

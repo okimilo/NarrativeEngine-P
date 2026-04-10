@@ -6,7 +6,7 @@ import { uid } from '../../utils/uid';
 import { toast } from '../../components/Toast';
 import { api } from '../../services/apiClient';
 
-const API = '/api';
+import { API_BASE as API } from '../../lib/apiBase';
 
 // ── DEFAULT constants ──────────────────────────────────────────────────
 

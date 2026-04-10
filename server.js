@@ -11,7 +11,7 @@ const app = express();
 const PORT = 3001;
 
 // ─── Data directory setup ───
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const CAMPAIGNS_DIR = path.join(DATA_DIR, 'campaigns');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 const BACKUPS_DIR = path.join(DATA_DIR, 'backups');
@@ -65,7 +65,7 @@ function writeJson(filePath, data) {
 function computeCampaignHash(id) {
      const fileNames = [
         `${id}.json`, `${id}.state.json`, `${id}.lore.json`, `${id}.npcs.json`,
-        `${id}.archive.md`, `${id}.archive.index.json`, `${id}.archive.chapters.json`, `${id}.facts.json`, `${id}.entities.json`,
+        `${id}.archive.md`, `${id}.archive.index.json`, `${id}.archive.chapters.json`, `${id}.timeline.json`, `${id}.entities.json`,
     ];
     const hash = crypto.createHash('md5');
     for (const name of fileNames) {
@@ -80,7 +80,7 @@ function computeCampaignHash(id) {
 function campaignFiles(id) {
      const names = [
         `${id}.json`, `${id}.state.json`, `${id}.lore.json`, `${id}.npcs.json`,
-        `${id}.archive.md`, `${id}.archive.index.json`, `${id}.archive.chapters.json`, `${id}.facts.json`, `${id}.entities.json`,
+        `${id}.archive.md`, `${id}.archive.index.json`, `${id}.archive.chapters.json`, `${id}.timeline.json`, `${id}.entities.json`,
     ];
     return names.filter(n => fs.existsSync(path.join(CAMPAIGNS_DIR, n)));
 }
@@ -177,6 +177,15 @@ function stripApiKeys(body) {
 // ─── Middleware ───
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// ─── Portrait assets ───────────────────────────────────────────────────────
+// Express serves portrait images only — the React app is loaded via Electron's
+// loadFile() (ASAR-native), so Express no longer needs to serve static HTML/JS/CSS.
+const PUBLIC_ASSETS_DIR = process.env.NODE_ENV === 'production'
+    ? path.join(DATA_DIR, 'portraits')
+    : path.join(__dirname, 'public', 'assets', 'portraits');
+if (!fs.existsSync(PUBLIC_ASSETS_DIR)) fs.mkdirSync(PUBLIC_ASSETS_DIR, { recursive: true });
+app.use('/assets/portraits', express.static(PUBLIC_ASSETS_DIR));
 
 // ═══════════════════════════════════════════
 //  Settings
@@ -491,6 +500,10 @@ function factsPath(id) {
 
 function entitiesPath(id) {
     return path.join(CAMPAIGNS_DIR, `${id}.entities.json`);
+}
+
+function timelinePath(id) {
+    return path.join(CAMPAIGNS_DIR, `${id}.timeline.json`);
 }
 
 function getNextSceneNumber(id) {
@@ -872,6 +885,163 @@ If no clear relationships exist, return empty array: []`;
     return null;
 }
 
+// ─── Timeline Extraction ───────────────────────────────────────────────
+
+const TIMELINE_PREDICATES_SERVER = [
+    'status', 'located_in', 'holds', 'allied_with', 'enemy_of',
+    'killed_by', 'controls', 'relationship_to', 'seeks', 'knows_about',
+    'destroyed', 'misc',
+];
+
+function extractTimelineEventsRegex(npcNames, text, sceneId, chapterId) {
+    const events = [];
+
+    for (const name of npcNames) {
+        // killed_by: "Name was killed/slain/defeated by X"
+        const killAsObject = new RegExp('([A-Z][A-Za-z\\s]{1,30})\\s+(killed|slain|defeated|destroyed|murdered)\\s+' + name, 'i');
+        const killMatch = text.match(killAsObject);
+        if (killMatch) {
+            events.push({
+                sceneId, chapterId, subject: name, predicate: 'killed_by',
+                object: killMatch[1].trim(),
+                summary: `${name} was killed by ${killMatch[1].trim()}`,
+                importance: 10, source: 'regex',
+            });
+        }
+
+        // status: "Name was found dead / died"
+        const deathSelf = new RegExp(name + '\\s+(was\\s+)?(died|found dead|perished|collapsed)', 'i');
+        if (deathSelf.test(text)) {
+            events.push({
+                sceneId, chapterId, subject: name, predicate: 'status',
+                object: 'dead',
+                summary: `${name} is dead`,
+                importance: 10, source: 'regex',
+            });
+        }
+
+        // located_in: "Name entered/arrived at/fled to X"
+        const locPattern = new RegExp(name + '\\s+(entered|arrived at|found in|returned to|fled to)\\s+(?:the\\s+)?([A-Z][A-Za-z\\s]{2,40})', 'i');
+        const locMatch = text.match(locPattern);
+        if (locMatch) {
+            events.push({
+                sceneId, chapterId, subject: name, predicate: 'located_in',
+                object: locMatch[2].trim(),
+                summary: `${name} is at ${locMatch[2].trim()}`,
+                importance: 5, source: 'regex',
+            });
+        }
+
+        // holds: "Name, King/Queen/Lord/... of X"
+        const titlePattern = new RegExp(name + ',\\s+((?:King|Queen|Lord|Lady|Duke|Prince|Princess|General|Commander|Archmage|Champion)(?:\\s+of\\s+[A-Za-z\\s]+)?)', 'i');
+        const titleMatch = text.match(titlePattern);
+        if (titleMatch) {
+            events.push({
+                sceneId, chapterId, subject: name, predicate: 'holds',
+                object: titleMatch[1].trim(),
+                summary: `${name} holds title: ${titleMatch[1].trim()}`,
+                importance: 7, source: 'regex',
+            });
+        }
+
+        // allied_with: "Name, leader/member of X"
+        const factionPattern = new RegExp(name + '[\\s,]+(?:leader\\s+of|member\\s+of|of)\\s+(?:the\\s+)?([A-Z][A-Za-z\\s]{2,30})', 'i');
+        const factionMatch = text.match(factionPattern);
+        if (factionMatch) {
+            events.push({
+                sceneId, chapterId, subject: name, predicate: 'allied_with',
+                object: factionMatch[1].trim(),
+                summary: `${name} is allied with ${factionMatch[1].trim()}`,
+                importance: 7, source: 'regex',
+            });
+        }
+    }
+
+    return events;
+}
+
+async function extractTimelineEventsLLM(entityNames, text, sceneId, chapterId, utilityConfig) {
+    if (!utilityConfig?.endpoint) return null;
+
+    const truncatedText = text.slice(0, 3000);
+
+    const prompt = `Extract world-state changes from this RPG scene as timeline events.
+
+Known entities (use canonical names): ${JSON.stringify(entityNames)}
+
+Allowed predicates: ${TIMELINE_PREDICATES_SERVER.join(', ')}
+
+Scene:
+${truncatedText}
+
+Rules:
+- Only extract clear, explicit state changes from the text
+- Use canonical entity names from the known entities list when possible
+- predicate must be exactly one from the allowed list; use "misc" if none fit
+- importance 1-10 (10 = death/major plot, 1 = minor detail)
+- summary: one human-readable sentence
+
+Respond ONLY with a JSON array:
+[
+  {"subject": "Name", "predicate": "killed_by", "object": "Goblin King", "summary": "Aldric was slain by the Goblin King", "importance": 10}
+]
+
+If no state changes, return: []`;
+
+    let attempts = 0;
+    while (attempts < 2) {
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 6000);
+
+            const response = await fetch(`${utilityConfig.endpoint}/chat/completions`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${utilityConfig.apiKey}`,
+                },
+                body: JSON.stringify({
+                    model: utilityConfig.model,
+                    messages: [{ role: 'user', content: prompt }],
+                    temperature: 0.1,
+                    stream: false,
+                }),
+                signal: controller.signal,
+            });
+
+            clearTimeout(timeout);
+            if (!response.ok) { attempts++; continue; }
+
+            const data = await response.json();
+            const content = data.choices?.[0]?.message?.content || '';
+
+            const jsonMatch = content.match(/\[[\s\S]*\]/);
+            if (!jsonMatch) { attempts++; continue; }
+
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (!Array.isArray(parsed)) { attempts++; continue; }
+
+            return parsed.filter(e =>
+                e.subject && e.predicate && e.object && typeof e.importance === 'number'
+            ).map(e => ({
+                sceneId,
+                chapterId,
+                subject: e.subject,
+                predicate: TIMELINE_PREDICATES_SERVER.includes(e.predicate) ? e.predicate : 'misc',
+                object: e.object,
+                summary: e.summary || `${e.subject} ${e.predicate} ${e.object}`,
+                importance: Math.min(10, Math.max(1, e.importance)),
+                source: 'llm',
+            }));
+        } catch (err) {
+            console.warn(`[Timeline Extraction] LLM attempt ${attempts + 1} failed:`, err.message);
+            attempts++;
+        }
+    }
+
+    return null;
+}
+
 // Pre-assign next scene number — called by client BEFORE sending to AI
 app.get('/api/campaigns/:id/archive/next-scene', (req, res) => {
     const next = getNextSceneNumber(req.params.id);
@@ -933,7 +1103,7 @@ app.post('/api/campaigns/:id/archive', async (req, res) => {
     existing.push(indexEntry);
     writeJson(idxp, existing);
 
-    // Extract semantic facts (LLM with regex fallback) and append to facts store
+    // Extract timeline events (LLM with regex fallback) and append to timeline store
     const entitiesFile = entitiesPath(req.params.id);
     const knownEntities = readJson(entitiesFile, []);
     const allEntityNames = [
@@ -944,41 +1114,35 @@ app.post('/api/campaigns/:id/archive', async (req, res) => {
     const uniqueEntityNames = [...new Set(allEntityNames.map(n => n.toLowerCase()))]
         .map(lower => allEntityNames.find(n => n.toLowerCase() === lower) || lower);
 
-    let newFacts = null;
+    // Determine which chapter this scene belongs to
+    const chaptersList = readJson(chaptersPath(req.params.id), []);
+    const openChapterForTimeline = chaptersList.find(c => !c.sealedAt) || chaptersList[chaptersList.length - 1];
+    const currentChapterId = openChapterForTimeline?.chapterId || 'CH01';
+
+    let newEvents = null;
     if (utilityConfig?.endpoint && npcNames.length > 0) {
-        newFacts = await extractFactsLLM(uniqueEntityNames, combinedText, utilityConfig);
+        newEvents = await extractTimelineEventsLLM(uniqueEntityNames, combinedText, sceneId, currentChapterId, utilityConfig);
     }
 
-    if (newFacts === null) {
-        newFacts = extractNPCFacts(npcNames, combinedText).map(f => ({
-            ...f,
-            source: 'regex',
-            confidence: 1.0,
-        }));
+    if (newEvents === null) {
+        newEvents = extractTimelineEventsRegex(npcNames, combinedText, sceneId, currentChapterId);
     } else {
-        for (const fact of newFacts) {
-            fact.subject = normalizeEntityName(fact.subject, knownEntities);
-            fact.object = normalizeEntityName(fact.object, knownEntities);
+        for (const ev of newEvents) {
+            ev.subject = normalizeEntityName(ev.subject, knownEntities);
+            ev.object = normalizeEntityName(ev.object, knownEntities);
         }
     }
 
-    if (newFacts.length > 0) {
-        const factsFile = factsPath(req.params.id);
-        const existingFacts = readJson(factsFile, []);
-        for (const fact of newFacts) {
-            const isDuplicate = existingFacts.some(ef =>
-                ef.subject === fact.subject && ef.predicate === fact.predicate && ef.object === fact.object
-            );
-            if (!isDuplicate) {
-                existingFacts.push({
-                    id: `fact_${String(existingFacts.length + 1).padStart(4, '0')}`,
-                    ...fact,
-                    sceneId,
-                    timestamp,
-                });
-            }
+    if (newEvents.length > 0) {
+        const tp = timelinePath(req.params.id);
+        const existingEvents = readJson(tp, []);
+        for (const ev of newEvents) {
+            existingEvents.push({
+                id: `tl_${String(existingEvents.length + 1).padStart(4, '0')}`,
+                ...ev,
+            });
         }
-        writeJson(factsFile, existingFacts);
+        writeJson(tp, existingEvents);
     }
 
     // Update entity registry
@@ -994,15 +1158,8 @@ app.post('/api/campaigns/:id/archive', async (req, res) => {
                 type: 'npc',
                 aliases: [],
                 firstSeen: sceneId,
-                factCount: 0,
             });
         }
-    }
-    const allFactsForCount = readJson(factsPath(req.params.id), []);
-    for (const entity of updatedEntities) {
-        entity.factCount = allFactsForCount.filter(f =>
-            f.subject === entity.name || f.object === entity.name
-        ).length;
     }
     writeJson(entitiesFile, updatedEntities);
 
@@ -1049,6 +1206,7 @@ app.delete('/api/campaigns/:id/archive', (req, res) => {
         archivePath(id),
         archiveIndexPath(id),
         chaptersPath(id),
+        timelinePath(id),
     ];
     for (const f of files) {
         if (fs.existsSync(f)) fs.unlinkSync(f);
@@ -1315,12 +1473,12 @@ app.delete('/api/campaigns/:id/archive/scenes-from/:sceneId', (req, res) => {
         writeJson(idxp, kept);
     }
 
-    // Trim facts from this scene onwards
-    const factsFile = factsPath(req.params.id);
-    if (fs.existsSync(factsFile)) {
-        const allFacts = readJson(factsFile, []);
-        const keptFacts = allFacts.filter(f => parseInt(f.sceneId, 10) < fromNum);
-        writeJson(factsFile, keptFacts);
+    // Trim timeline from this scene onwards
+    const tlp = timelinePath(req.params.id);
+    if (fs.existsSync(tlp)) {
+        const timeline = readJson(tlp, []);
+        const keptTimeline = timeline.filter(e => parseInt(e.sceneId, 10) < fromNum);
+        writeJson(tlp, keptTimeline);
     }
 
     // --- NEW: Chapter Rollback Cascade ---
@@ -1376,6 +1534,76 @@ app.delete('/api/campaigns/:id/archive/scenes-from/:sceneId', (req, res) => {
         chaptersRepaired, 
         condenserResetRecommended: true 
     });
+});
+
+// ═══════════════════════════════════════════
+//  Timeline (World State Truth Store)
+// ═══════════════════════════════════════════
+
+// GET — return full timeline; migrates from .facts.json on first access
+app.get('/api/campaigns/:id/timeline', (req, res) => {
+    const id = req.params.id;
+    const tp = timelinePath(id);
+
+    if (!fs.existsSync(tp)) {
+        // Migration: convert existing facts to timeline events (one-time)
+        const fp = factsPath(id);
+        if (fs.existsSync(fp)) {
+            const facts = readJson(fp, []);
+            const migrated = facts.map(f => ({
+                id: `tl_${f.id ? f.id.replace('fact_', '') : String(Math.random()).slice(2, 6)}`,
+                sceneId: f.sceneId || '000',
+                chapterId: 'CH00',
+                subject: f.subject || '',
+                predicate: TIMELINE_PREDICATES_SERVER.includes(f.predicate) ? f.predicate : 'misc',
+                object: f.object || '',
+                summary: `${f.subject} ${f.predicate} ${f.object}`,
+                importance: typeof f.importance === 'number' ? f.importance : 5,
+                source: f.source || 'regex',
+            }));
+            writeJson(tp, migrated);
+            return res.json(migrated);
+        }
+        return res.json([]);
+    }
+
+    res.json(readJson(tp, []));
+});
+
+// POST — add a manual timeline event
+app.post('/api/campaigns/:id/timeline', (req, res) => {
+    const tp = timelinePath(req.params.id);
+    const existing = readJson(tp, []);
+    const { subject, predicate, object: obj, summary, importance, sceneId: evSceneId, chapterId } = req.body;
+
+    if (!subject || !predicate || !obj) {
+        return res.status(400).json({ error: 'subject, predicate, and object are required' });
+    }
+
+    const event = {
+        id: `tl_${String(existing.length + 1).padStart(4, '0')}`,
+        sceneId: evSceneId || '000',
+        chapterId: chapterId || 'CH00',
+        subject,
+        predicate: TIMELINE_PREDICATES_SERVER.includes(predicate) ? predicate : 'misc',
+        object: obj,
+        summary: summary || `${subject} ${predicate} ${obj}`,
+        importance: Math.min(10, Math.max(1, typeof importance === 'number' ? importance : 5)),
+        source: 'manual',
+    };
+
+    existing.push(event);
+    writeJson(tp, existing);
+    res.json(event);
+});
+
+// DELETE — remove a single event by id
+app.delete('/api/campaigns/:id/timeline/:eventId', (req, res) => {
+    const tp = timelinePath(req.params.id);
+    const existing = readJson(tp, []);
+    const filtered = existing.filter(e => e.id !== req.params.eventId);
+    writeJson(tp, filtered);
+    res.json({ ok: true, removed: existing.length - filtered.length });
 });
 
 // Open archive in OS default app
@@ -1454,9 +1682,8 @@ app.post('/api/campaigns/:id/entities/merge', (req, res) => {
 // ═══════════════════════════════════════════
 //  Assets (NPC Portraits)
 // ═══════════════════════════════════════════
-
-const PUBLIC_ASSETS_DIR = path.join(__dirname, 'public', 'assets', 'portraits');
-if (!fs.existsSync(PUBLIC_ASSETS_DIR)) fs.mkdirSync(PUBLIC_ASSETS_DIR, { recursive: true });
+// Note: PUBLIC_ASSETS_DIR is defined near the top of this file (before the
+// static-serving block) so the bundled CJS output sees it at initialisation time.
 
 app.post('/api/assets/download', async (req, res) => {
     const { url, filename } = req.body;

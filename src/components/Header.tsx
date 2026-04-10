@@ -4,6 +4,7 @@ import { toast } from './Toast';
 import { useAppStore } from '../store/useAppStore';
 import { TokenGauge } from './TokenGauge';
 import { saveCampaignState } from '../store/campaignStore';
+import { API_BASE as API } from '../lib/apiBase';
 
 export function Header() {
     const {
@@ -78,7 +79,7 @@ export function Header() {
             <button
                 onClick={() => {
                     if (activeCampaignId) {
-                        fetch('/api/campaigns/' + activeCampaignId + '/backup', {
+                        fetch(`${API}/campaigns/${activeCampaignId}/backup`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ trigger: 'pre-clear', isAuto: true }),

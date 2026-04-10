@@ -1,9 +1,11 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
-import { 
-    ChevronDown, ChevronUp, Lock, Unlock, AlertCircle, 
-    RefreshCcw, Edit2, Check, X, GitMerge, Scissors 
+import {
+    ChevronDown, ChevronUp, Lock, Unlock, AlertCircle,
+    RefreshCcw, Edit2, Check, X, GitMerge, Scissors
 } from 'lucide-react';
-import type { ArchiveChapter } from '../../types';
+import type { ArchiveChapter, TimelineEvent } from '../../types';
+import { TimelineDotRow } from './TimelineDotRow';
+import { getEventsByChapter } from '../../services/timelineResolver';
 
 interface ChapterCardProps {
     chapter: ArchiveChapter;
@@ -15,6 +17,8 @@ interface ChapterCardProps {
     onMergeWithNext?: () => void;
     onSplit?: (atSceneId: string) => void;
     isNextAdjacent?: boolean;
+    timelineEvents?: TimelineEvent[];
+    onDeleteTimelineEvent?: (eventId: string) => void;
 }
 
 export const ChapterCard = memo(function ChapterCard({
@@ -27,6 +31,8 @@ export const ChapterCard = memo(function ChapterCard({
     onMergeWithNext,
     onSplit,
     isNextAdjacent,
+    timelineEvents,
+    onDeleteTimelineEvent,
 }: ChapterCardProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [editTitle, setEditTitle] = useState(chapter.title);
@@ -59,6 +65,7 @@ export const ChapterCard = memo(function ChapterCard({
     };
 
     const status = chapter.invalidated ? 'invalidated' : (chapter.sealedAt ? 'sealed' : 'open');
+    const chapterEvents = timelineEvents ? getEventsByChapter(timelineEvents, chapter.chapterId) : [];
     
     const statusColors = {
         sealed: 'text-terminal border-terminal/30 bg-terminal/5',
@@ -117,6 +124,15 @@ export const ChapterCard = memo(function ChapterCard({
                     {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                 </div>
             </div>
+
+            {/* Timeline dot row — always visible, shows event density per scene */}
+            {chapterEvents.length > 0 && onDeleteTimelineEvent && (
+                <TimelineDotRow
+                    chapter={chapter}
+                    events={chapterEvents}
+                    onDeleteEvent={onDeleteTimelineEvent}
+                />
+            )}
 
             {/* Expandable Content */}
             {expanded && (

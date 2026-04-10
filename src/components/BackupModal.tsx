@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { X, RotateCcw, Trash2, Save, Clock, Loader2 } from 'lucide-react';
 import { useAppStore } from '../store/useAppStore';
-import { listBackups, createBackup, restoreBackup, deleteBackup, loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex, loadSemanticFacts, loadChapters, loadEntities } from '../store/campaignStore';
+import { listBackups, createBackup, restoreBackup, deleteBackup, loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex, loadTimeline, loadChapters, loadEntities } from '../store/campaignStore';
+import { cancelPendingSaves, defaultContext } from '../store/slices/campaignSlice';
 import type { BackupMeta } from '../types';
 import { toast } from './Toast';
 
@@ -56,29 +57,39 @@ export function BackupModal() {
         if (!window.confirm(`Restore from "${label}"?\n\nYour current state will be saved as a backup first.`)) return;
 
         setRestoringTs(ts);
+        // Cancel any pending debounced saves so they don't overwrite the restored
+        // files between the server copy and our client-side load below.
+        cancelPendingSaves();
         const ok = await restoreBackup(activeCampaignId, ts);
         if (ok) {
-            toast.success('Restored from backup');
-            const [state, chunks, npcs, archiveIndex, semanticFacts, chapters, entities] = await Promise.all([
-                loadCampaignState(activeCampaignId),
-                getLoreChunks(activeCampaignId),
-                getNPCLedger(activeCampaignId),
-                loadArchiveIndex(activeCampaignId),
-                loadSemanticFacts(activeCampaignId),
-                loadChapters(activeCampaignId),
-                loadEntities(activeCampaignId),
-            ]);
-            useAppStore.setState({
-                context: state?.context ?? useAppStore.getState().context,
-                messages: state?.messages ?? [],
-                condenser: state?.condenser ?? { condensedSummary: '', condensedUpToIndex: -1, isCondensing: false },
-                loreChunks: chunks,
-                npcLedger: npcs,
-                archiveIndex: archiveIndex ?? [],
-                semanticFacts: semanticFacts ?? [],
-                chapters: chapters ?? [],
-                entities: entities ?? [],
-            });
+            try {
+                const [state, chunks, npcs, archiveIndex, timeline, chapters, entities] = await Promise.all([
+                    loadCampaignState(activeCampaignId),
+                    getLoreChunks(activeCampaignId),
+                    getNPCLedger(activeCampaignId),
+                    loadArchiveIndex(activeCampaignId),
+                    loadTimeline(activeCampaignId),
+                    loadChapters(activeCampaignId),
+                    loadEntities(activeCampaignId),
+                ]);
+                const DEFAULT_CONDENSER = { condensedSummary: '', condensedUpToIndex: -1, isCondensing: false };
+                useAppStore.setState({
+                    context: { ...defaultContext, ...(state?.context ?? {}) },
+                    messages: state?.messages ?? [],
+                    condenser: { ...(state?.condenser ?? DEFAULT_CONDENSER), isCondensing: false },
+                    loreChunks: chunks,
+                    npcLedger: npcs,
+                    archiveIndex: archiveIndex ?? [],
+                    timeline: timeline ?? [],
+                    chapters: chapters ?? [],
+                    entities: entities ?? [],
+                });
+                toast.success('Restored from backup');
+                await loadBackups();
+            } catch (err) {
+                console.error('[Restore] Failed to reload state after restore:', err);
+                toast.error('Restore failed — could not reload data');
+            }
         } else {
             toast.error('Restore failed');
         }

@@ -12,7 +12,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ToastContainer } from './components/Toast';
 import { VaultUnlockModal } from './components/VaultUnlockModal';
 import {
-  loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex, loadSemanticFacts, loadChapters, loadEntities,
+  loadCampaignState, getLoreChunks, getNPCLedger, loadArchiveIndex, loadTimeline, loadChapters, loadEntities,
 } from './store/campaignStore';
 
 const DEFAULT_CONDENSER = { condensedSummary: '', condensedUpToIndex: -1, isCondensing: false };
@@ -71,12 +71,12 @@ export default function App() {
     setCampaignLoaded(false);
 
     (async () => {
-      const [state, chunks, npcs, archiveIndex, semanticFacts, chapters, entities] = await Promise.all([
+      const [state, chunks, npcs, archiveIndex, timeline, chapters, entities] = await Promise.all([
         loadCampaignState(activeCampaignId),
         getLoreChunks(activeCampaignId),
         getNPCLedger(activeCampaignId),
         loadArchiveIndex(activeCampaignId),
-        loadSemanticFacts(activeCampaignId),
+        loadTimeline(activeCampaignId),
         loadChapters(activeCampaignId),
         loadEntities(activeCampaignId),
       ]);
@@ -89,7 +89,7 @@ export default function App() {
         loreChunks: chunks,
         npcLedger: npcs,
         archiveIndex,
-        semanticFacts,
+        timeline,
         chapters,
         entities,
       });

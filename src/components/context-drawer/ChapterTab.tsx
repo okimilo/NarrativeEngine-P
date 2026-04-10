@@ -3,14 +3,16 @@ import { BookOpen, Plus, Loader2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { api } from '../../services/apiClient';
 import { ChapterCard } from './ChapterCard';
+import { ResolvedStatePanel } from './ResolvedStatePanel';
 import { generateChapterSummary } from '../../services/saveFileEngine';
 import { toast } from '../Toast';
 import type { ArchiveChapter } from '../../types';
 
 export const ChapterTab: React.FC = () => {
-    const { 
-        chapters, setChapters, activeCampaignId, 
-        context, getActiveSummarizerEndpoint 
+    const {
+        chapters, setChapters, activeCampaignId,
+        context, getActiveSummarizerEndpoint,
+        timeline, setTimeline, removeTimelineEvent,
     } = useAppStore();
     
     const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -19,9 +21,13 @@ export const ChapterTab: React.FC = () => {
 
     const refreshChapters = useCallback(async () => {
         if (!activeCampaignId) return;
-        const fresh = await api.chapters.list(activeCampaignId);
+        const [fresh, freshTimeline] = await Promise.all([
+            api.chapters.list(activeCampaignId),
+            api.timeline.get(activeCampaignId),
+        ]);
         setChapters(fresh);
-    }, [activeCampaignId, setChapters]);
+        setTimeline(freshTimeline);
+    }, [activeCampaignId, setChapters, setTimeline]);
 
     useEffect(() => {
         refreshChapters();
@@ -134,6 +140,13 @@ export const ChapterTab: React.FC = () => {
         }
     }, [activeCampaignId, refreshChapters, generateSummaryAsync]);
 
+    const handleDeleteTimelineEvent = useCallback(async (eventId: string) => {
+        if (!activeCampaignId) return;
+        const ok = await api.timeline.remove(activeCampaignId, eventId);
+        if (ok) removeTimelineEvent(eventId);
+        else toast.error('Failed to remove timeline event');
+    }, [activeCampaignId, removeTimelineEvent]);
+
     const handleNewChapter = useCallback(async () => {
         if (!activeCampaignId) return;
         setIsCreating(true);
@@ -169,6 +182,8 @@ export const ChapterTab: React.FC = () => {
             </div>
 
             <div className="flex-1 overflow-y-auto pr-1 space-y-2 custom-scrollbar">
+                <ResolvedStatePanel />
+
                 {chapters.length === 0 ? (
                     <div className="flex flex-col items-center justify-center py-12 text-center space-y-3 opacity-40">
                         <BookOpen size={48} strokeWidth={1} />
@@ -189,7 +204,7 @@ export const ChapterTab: React.FC = () => {
                                         </div>
                                     </div>
                                 )}
-                                <ChapterCard 
+                                <ChapterCard
                                     chapter={ch}
                                     expanded={expandedId === ch.chapterId}
                                     onToggle={() => setExpandedId(expandedId === ch.chapterId ? null : ch.chapterId)}
@@ -199,6 +214,8 @@ export const ChapterTab: React.FC = () => {
                                     onSplit={(sceneId) => handleSplit(ch.chapterId, sceneId)}
                                     isNextAdjacent={isNextAdjacent}
                                     onMergeWithNext={() => nextChapter && handleMerge(ch.chapterId, nextChapter.chapterId)}
+                                    timelineEvents={timeline}
+                                    onDeleteTimelineEvent={handleDeleteTimelineEvent}
                                 />
                             </div>
                         );

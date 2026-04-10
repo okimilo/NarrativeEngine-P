@@ -1,4 +1,4 @@
-const API = '/api';
+import { API_BASE as API, ASSET_BASE } from '../lib/apiBase';
 
 /**
  * Downloads a remote image and saves it locally.
@@ -21,5 +21,7 @@ export async function downloadImageToLocal(url: string, npcName: string): Promis
     }
 
     const data = await res.json();
-    return data.path; // e.g. /assets/portraits/bob_123.png
+    // In Electron production (file:// protocol), prefix with the server base so
+    // <img src> resolves to http://localhost:3001/assets/portraits/... not file:///.
+    return `${ASSET_BASE}${data.path}`; // e.g. /assets/portraits/bob_123.png
 }

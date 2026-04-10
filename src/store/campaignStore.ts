@@ -1,6 +1,6 @@
-import type { ArchiveChapter, Campaign, LoreChunk, GameContext, ChatMessage, CondenserState, NPCEntry, ArchiveIndexEntry, SemanticFact, EntityEntry, BackupMeta } from '../types';
+import type { ArchiveChapter, Campaign, LoreChunk, GameContext, ChatMessage, CondenserState, NPCEntry, ArchiveIndexEntry, SemanticFact, EntityEntry, BackupMeta, TimelineEvent } from '../types';
 
-const API = '/api';
+import { API_BASE as API } from '../lib/apiBase';
 
 export type CampaignState = {
     context: GameContext;
@@ -36,10 +36,14 @@ export async function deleteCampaign(id: string): Promise<void> {
 // ─── Campaign State ───
 
 export async function saveCampaignState(campaignId: string, state: CampaignState): Promise<void> {
+    const stripped: CampaignState = {
+        ...state,
+        messages: state.messages.map(({ debugPayload: _dp, ...msg }) => msg),
+    };
     await fetch(`${API}/campaigns/${campaignId}/state`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(state),
+        body: JSON.stringify(stripped),
     });
 }
 
@@ -173,6 +177,34 @@ export async function deleteBackup(campaignId: string, timestamp: number): Promi
         console.warn('[Backup] Delete failed:', err);
     }
     return false;
+}
+
+// ─── Timeline ───────────────────────────────────────────────────────────
+
+export async function loadTimeline(campaignId: string): Promise<TimelineEvent[]> {
+    const res = await fetch(`${API}/campaigns/${campaignId}/timeline`);
+    if (!res.ok) return [];
+    return res.json();
+}
+
+export async function addTimelineEvent(
+    campaignId: string,
+    event: Omit<TimelineEvent, 'id' | 'source'>
+): Promise<TimelineEvent | undefined> {
+    const res = await fetch(`${API}/campaigns/${campaignId}/timeline`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(event),
+    });
+    if (!res.ok) return undefined;
+    return res.json();
+}
+
+export async function removeTimelineEvent(campaignId: string, eventId: string): Promise<boolean> {
+    const res = await fetch(`${API}/campaigns/${campaignId}/timeline/${eventId}`, {
+        method: 'DELETE',
+    });
+    return res.ok;
 }
 
 export async function updateChapter(campaignId: string, chapterId: string, patch: Partial<ArchiveChapter>): Promise<ArchiveChapter | undefined> {

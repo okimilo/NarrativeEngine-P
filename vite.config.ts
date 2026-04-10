@@ -4,6 +4,10 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Use relative asset paths so index.html works when loaded via Electron's
+  // loadFile() (file:// protocol). Without this, Vite emits /assets/... which
+  // resolves to the filesystem root, not the dist folder.
+  base: './',
   server: {
     proxy: {
       '/api': {

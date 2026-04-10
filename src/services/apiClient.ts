@@ -1,6 +1,6 @@
-import type { AppSettings, ArchiveChapter, ArchiveIndexEntry, SemanticFact, EntityEntry, BackupMeta } from '../types';
+import type { AppSettings, ArchiveChapter, ArchiveIndexEntry, SemanticFact, EntityEntry, BackupMeta, TimelineEvent } from '../types';
 
-const API = '/api';
+import { API_BASE as API } from '../lib/apiBase';
 
 export const api = {
     archive: {
@@ -132,6 +132,41 @@ export const api = {
                 console.warn('[Facts] Failed to fetch:', err);
             }
             return [];
+        },
+    },
+    timeline: {
+        async get(campaignId: string): Promise<TimelineEvent[]> {
+            try {
+                const res = await fetch(`${API}/campaigns/${campaignId}/timeline`);
+                if (res.ok) return await res.json();
+            } catch (err) {
+                console.warn('[Timeline] Failed to fetch:', err);
+            }
+            return [];
+        },
+        async add(campaignId: string, event: Omit<TimelineEvent, 'id' | 'source'> & { source?: TimelineEvent['source'] }): Promise<TimelineEvent | undefined> {
+            try {
+                const res = await fetch(`${API}/campaigns/${campaignId}/timeline`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ...event, object: event.object }),
+                });
+                if (res.ok) return await res.json();
+            } catch (err) {
+                console.warn('[Timeline] Failed to add event:', err);
+            }
+            return undefined;
+        },
+        async remove(campaignId: string, eventId: string): Promise<boolean> {
+            try {
+                const res = await fetch(`${API}/campaigns/${campaignId}/timeline/${eventId}`, {
+                    method: 'DELETE',
+                });
+                return res.ok;
+            } catch (err) {
+                console.warn('[Timeline] Failed to remove event:', err);
+                return false;
+            }
         },
     },
     entities: {

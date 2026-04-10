@@ -340,3 +340,41 @@ export type BackupMeta = {
     isAuto: boolean;
     campaignName: string;
 };
+
+// ─── Timeline System ───────────────────────────────────────────────────
+
+export const TIMELINE_PREDICATES = [
+    'status',          // alive, dead, injured, imprisoned, missing
+    'located_in',      // current location
+    'holds',           // items, artifacts, titles, territory
+    'allied_with',     // faction/person allegiance
+    'enemy_of',        // faction/person hostility
+    'killed_by',       // cause/agent of death
+    'controls',        // governs, commands
+    'relationship_to', // parent_of, lover_of, servant_of (object contains relation + target)
+    'seeks',           // current goal/motivation
+    'knows_about',     // information they possess
+    'destroyed',       // for places/objects
+    'misc',            // escape hatch — appended but never overwritten in resolution
+] as const;
+
+export type TimelinePredicate = typeof TIMELINE_PREDICATES[number];
+
+/** When a killer predicate is resolved for a subject, its victims are suppressed from output. */
+export const SUPERSEDE_RULES: Record<string, string[]> = {
+    killed_by:  ['status', 'located_in', 'seeks', 'allied_with'],
+    destroyed:  ['located_in', 'controls', 'holds'],
+    status:     [],  // status alone doesn't supersede anything (only killed_by does)
+};
+
+export type TimelineEvent = {
+    id: string;           // "tl_0001" — monotonic counter
+    sceneId: string;      // "001" — zero-padded, links to scene
+    chapterId: string;    // "CH01" — auto-linked to open chapter at extraction time
+    subject: string;      // "Aldric"
+    predicate: TimelinePredicate;
+    object: string;       // "dead", "castle", "Queen Mira"
+    summary: string;      // "Aldric was slain by the Goblin King"
+    importance: number;   // 1-10
+    source: 'regex' | 'llm' | 'manual';
+};

@@ -4,9 +4,10 @@ import { useAppStore } from '../store/useAppStore';
 import {
     listCampaigns, deleteCampaign, loadCampaignState,
     saveCampaign, saveCampaignState, saveLoreChunks, getLoreChunks,
-    getNPCLedger, loadArchiveIndex, saveNPCLedger, loadSemanticFacts, loadEntities
+    getNPCLedger, loadArchiveIndex, saveNPCLedger, loadTimeline, loadEntities
 } from '../store/campaignStore';
 import { chunkLoreFile } from '../services/loreChunker';
+import { API_BASE as API } from '../lib/apiBase';
 import { extractEngineSeeds } from '../services/loreEngineSeeder';
 import { parseNPCsFromLore } from '../services/loreNPCParser';
 import {
@@ -198,22 +199,22 @@ export function CampaignHub() {
     const handleSelectCampaign = async (campaign: Campaign) => {
         const updatedCampaign = { ...campaign, lastPlayedAt: Date.now() };
         await saveCampaign(updatedCampaign);
-        const [state, chunks, npcs, archiveIndex, semanticFacts, entities] = await Promise.all([
+        const [state, chunks, npcs, archiveIndex, timeline, entities] = await Promise.all([
             loadCampaignState(campaign.id), getLoreChunks(campaign.id),
-            getNPCLedger(campaign.id), loadArchiveIndex(campaign.id), loadSemanticFacts(campaign.id),
+            getNPCLedger(campaign.id), loadArchiveIndex(campaign.id), loadTimeline(campaign.id),
             loadEntities(campaign.id),
         ]);
         useAppStore.setState({
             context: { ...DEFAULT_CONTEXT, ...(state?.context ?? {}) },
             messages: state?.messages ?? [],
             condenser: { ...(state?.condenser ?? DEFAULT_CONDENSER), isCondensing: false },
-            loreChunks: chunks, npcLedger: npcs, archiveIndex, semanticFacts, entities,
+            loreChunks: chunks, npcLedger: npcs, archiveIndex, timeline, entities,
             activeCampaignId: campaign.id,
         });
     };
 
     const handleDelete = async (id: string) => {
-        fetch('/api/campaigns/' + id + '/backup', {
+        fetch(`${API}/campaigns/${id}/backup`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ trigger: 'pre-delete-campaign', label: 'Auto-backup before deletion' }),
