@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Briefcase, RefreshCw, User } from 'lucide-react';
+import { Briefcase, RefreshCw, User, Settings2 } from 'lucide-react';
 import { useAppStore } from '../../store/useAppStore';
 import { scanInventory } from '../../services/inventoryParser';
 import { scanCharacterProfile } from '../../services/characterProfileParser';
@@ -7,13 +7,29 @@ import { TemplateField } from './TemplateField';
 import { toast } from '../Toast';
 import type { EndpointConfig, ProviderConfig } from '../../types';
 
+function SceneTag({ lastScene }: { lastScene: string }) {
+    if (!lastScene || lastScene === 'Never') {
+        return <span className="text-text-dim/40">Never updated</span>;
+    }
+    return <span className="text-terminal/70">Last updated: Scene #{lastScene}</span>;
+}
+
 export function BookkeepingTab() {
     const context = useAppStore((s) => s.context);
     const updateContext = useAppStore((s) => s.updateContext);
     const messages = useAppStore((s) => s.messages);
+    const archiveIndex = useAppStore((s) => s.archiveIndex);
+    const autoBookkeepingInterval = useAppStore((s) => s.autoBookkeepingInterval);
+    const setAutoBookkeepingInterval = useAppStore((s) => s.setAutoBookkeepingInterval);
     const getActiveStoryEndpoint = useAppStore((s) => s.getActiveStoryEndpoint);
     const [isScanningInventory, setIsScanningInventory] = useState(false);
     const [isScanningProfile, setIsScanningProfile] = useState(false);
+    const [showSettings, setShowSettings] = useState(false);
+
+    const getCurrentSceneId = (): string => {
+        if (archiveIndex.length === 0) return '1';
+        return archiveIndex[archiveIndex.length - 1].sceneId;
+    };
 
     const handleCheckInventory = async () => {
         if (isScanningInventory) return;
@@ -22,7 +38,8 @@ export function BookkeepingTab() {
             const provider = getActiveStoryEndpoint();
             if (!provider) return;
             const newInventory = await scanInventory(provider as ProviderConfig | EndpointConfig, messages, context.inventory);
-            updateContext({ inventory: newInventory });
+            const sceneId = getCurrentSceneId();
+            updateContext({ inventory: newInventory, inventoryLastScene: sceneId });
         } catch (e) {
             console.error('Failed to scan inventory:', e);
             toast.error('Inventory scan failed');
@@ -38,7 +55,8 @@ export function BookkeepingTab() {
             const provider = getActiveStoryEndpoint();
             if (!provider) return;
             const newProfile = await scanCharacterProfile(provider as ProviderConfig | EndpointConfig, messages, context.characterProfile);
-            updateContext({ characterProfile: newProfile });
+            const sceneId = getCurrentSceneId();
+            updateContext({ characterProfile: newProfile, characterProfileLastScene: sceneId });
         } catch (e) {
             console.error('Failed to scan character profile:', e);
             toast.error('Character profile scan failed');
@@ -65,6 +83,9 @@ export function BookkeepingTab() {
                     active={context.inventoryActive}
                     onToggle={() => updateContext({ inventoryActive: !context.inventoryActive })}
                 />
+                <div className="mt-1 flex items-center justify-between">
+                    <span className="text-[9px]"><SceneTag lastScene={context.inventoryLastScene} /></span>
+                </div>
                 <div className="mt-2 flex justify-end">
                     <button
                         onClick={handleCheckInventory}
@@ -90,6 +111,9 @@ export function BookkeepingTab() {
                     active={context.characterProfileActive}
                     onToggle={() => updateContext({ characterProfileActive: !context.characterProfileActive })}
                 />
+                <div className="mt-1 flex items-center justify-between">
+                    <span className="text-[9px]"><SceneTag lastScene={context.characterProfileLastScene} /></span>
+                </div>
                 <div className="mt-2 flex justify-end">
                     <button
                         onClick={handlePopulateProfile}
@@ -101,6 +125,36 @@ export function BookkeepingTab() {
                         {isScanningProfile ? 'Scanning...' : 'Populate Profile'}
                     </button>
                 </div>
+            </div>
+
+            <div className="pt-4 border-t border-border/50">
+                <button
+                    onClick={() => setShowSettings(!showSettings)}
+                    className="flex items-center gap-1.5 text-text-dim/60 hover:text-text-primary text-[9px] uppercase tracking-wider transition-colors"
+                >
+                    <Settings2 size={10} />
+                    {showSettings ? 'Hide' : 'Auto-Update Settings'}
+                </button>
+                {showSettings && (
+                    <div className="mt-2 space-y-2">
+                        <div className="flex items-center gap-2">
+                            <label className="text-[9px] text-text-dim/60 uppercase tracking-wider whitespace-nowrap">
+                                Scan every N turns:
+                            </label>
+                            <input
+                                type="number"
+                                min={1}
+                                max={50}
+                                value={autoBookkeepingInterval}
+                                onChange={(e) => setAutoBookkeepingInterval(Number(e.target.value))}
+                                className="w-16 px-2 py-1 bg-void border border-border rounded text-text-primary text-[11px] text-center focus:outline-none focus:border-terminal"
+                            />
+                        </div>
+                        <p className="text-[8px] text-text-dim/40">
+                            Profile and inventory are auto-scanned every N player turns via background queue (max 2 concurrent LLM calls).
+                        </p>
+                    </div>
+                )}
             </div>
         </div>
     );

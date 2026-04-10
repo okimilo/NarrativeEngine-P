@@ -323,7 +323,7 @@ function buildChapterSummaryPrompt(
         'OUTPUT FORMAT — respond with a JSON object:',
         '{',
         '    "title": "Short evocative chapter title",',
-        '    "summary": "3-5 sentence narrative summary of what happened",',
+        '    "summary": "4-8 bullet points covering key events, each on its own line starting with `- `",',
         '    "keywords": ["keyword1", "keyword2", ...],',
         '    "npcs": ["NPC Name 1", "NPC Name 2", ...],',
         '    "majorEvents": ["Event description 1", "Event description 2"],',

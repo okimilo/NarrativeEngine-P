@@ -1,11 +1,33 @@
 import React, { memo, useState, useEffect, useRef } from 'react';
 import {
     ChevronDown, ChevronUp, Lock, Unlock, AlertCircle,
-    RefreshCcw, Edit2, Check, X, GitMerge, Scissors
+    RefreshCcw, Edit2, Check, X, GitMerge, Scissors, Pin, PinOff
 } from 'lucide-react';
 import type { ArchiveChapter, TimelineEvent } from '../../types';
 import { TimelineDotRow } from './TimelineDotRow';
 import { getEventsByChapter } from '../../services/timelineResolver';
+import { CHAPTER_SCENE_SOFT_CAP } from '../../types';
+
+function SummaryText({ text }: { text: string }) {
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const isBullet = (l: string) => l.startsWith('- ') || l.startsWith('• ');
+    if (lines.some(isBullet)) {
+        return (
+            <ul className="list-disc list-inside text-xs text-text-secondary space-y-0.5 pl-1">
+                {lines.map((l, i) =>
+                    isBullet(l)
+                        ? <li key={i}>{l.replace(/^[-•]\s*/, '')}</li>
+                        : <p key={i} className="text-[13px] font-serif italic">{l}</p>
+                )}
+            </ul>
+        );
+    }
+    return (
+        <p className="text-text-secondary leading-relaxed font-serif italic text-[13px] bg-void-dark/50 p-2 rounded border border-border/30">
+            {text}
+        </p>
+    );
+}
 
 interface ChapterCardProps {
     chapter: ArchiveChapter;
@@ -19,6 +41,8 @@ interface ChapterCardProps {
     isNextAdjacent?: boolean;
     timelineEvents?: TimelineEvent[];
     onDeleteTimelineEvent?: (eventId: string) => void;
+    isPinned?: boolean;
+    onTogglePin?: () => void;
 }
 
 export const ChapterCard = memo(function ChapterCard({
@@ -33,6 +57,8 @@ export const ChapterCard = memo(function ChapterCard({
     isNextAdjacent,
     timelineEvents,
     onDeleteTimelineEvent,
+    isPinned,
+    onTogglePin,
 }: ChapterCardProps) {
     const [isEditing, setIsEditing] = useState(false);
     const [editTitle, setEditTitle] = useState(chapter.title);
@@ -109,9 +135,20 @@ export const ChapterCard = memo(function ChapterCard({
                             </h3>
                         )}
                     </div>
-                    <div className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase flex items-center shrink-0 ${statusColors[status]}`}>
-                        {statusIcons[status]}
-                        {status.toUpperCase()}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        {onTogglePin && (
+                            <button
+                                onClick={e => { e.stopPropagation(); onTogglePin(); }}
+                                title={isPinned ? 'Unpin chapter' : 'Pin to next turn'}
+                                className={`transition-colors ${isPinned ? 'text-amber-400 hover:text-amber-300' : 'text-text-muted hover:text-text-secondary'}`}
+                            >
+                                {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
+                            </button>
+                        )}
+                        <div className={`px-2 py-0.5 rounded border text-[10px] font-bold uppercase flex items-center ${statusColors[status]}`}>
+                            {statusIcons[status]}
+                            {status.toUpperCase()}
+                        </div>
                     </div>
                 </div>
 
@@ -120,6 +157,16 @@ export const ChapterCard = memo(function ChapterCard({
                         <span>SCENES {chapter.sceneRange[0]}–{chapter.sceneRange[1]}</span>
                         <span className="opacity-50">|</span>
                         <span>{chapter.sceneCount} SCENES</span>
+                        {status === 'open' && chapter.sceneCount >= 20 && (
+                            <span className={`text-[9px] font-bold uppercase px-1 py-0.5 rounded ${chapter.sceneCount >= CHAPTER_SCENE_SOFT_CAP ? 'text-ember bg-ember/10 border border-ember/30' : 'text-amber-400 bg-amber-400/10 border border-amber-400/30'}`}>
+                                {chapter.sceneCount}/{CHAPTER_SCENE_SOFT_CAP}
+                            </span>
+                        )}
+                        {isPinned && (
+                            <span className="text-[9px] font-bold uppercase text-amber-400 bg-amber-400/10 border border-amber-400/30 px-1 py-0.5 rounded">
+                                PINNED
+                            </span>
+                        )}
                     </div>
                     {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                 </div>
@@ -142,9 +189,7 @@ export const ChapterCard = memo(function ChapterCard({
                         {chapter.summary ? (
                             <div className="space-y-1">
                                 <label className="text-[10px] font-bold uppercase text-terminal/60 tracking-wider font-mono">Summary</label>
-                                <p className="text-text-secondary leading-relaxed font-serif italic text-[13px] bg-void-dark/50 p-2 rounded border border-border/30">
-                                    {chapter.summary}
-                                </p>
+                                <SummaryText text={chapter.summary} />
                             </div>
                         ) : (
                             <div className="text-text-muted italic text-xs py-2">

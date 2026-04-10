@@ -233,8 +233,18 @@ export function buildPayload(
 
     // --- 5. Volatile State (Profile, Inventory) ---
     const volatileParts: string[] = [];
-    if (context.characterProfileActive && context.characterProfile) volatileParts.push(`[CHARACTER PROFILE]\n${context.characterProfile}`);
-    if (context.inventoryActive && context.inventory) volatileParts.push(`[PLAYER INVENTORY]\n${context.inventory}`);
+    if (context.characterProfileActive && context.characterProfile) {
+        const profileSceneTag = context.characterProfileLastScene && context.characterProfileLastScene !== 'Never'
+            ? `Last Updated: Scene #${context.characterProfileLastScene}`
+            : 'NEVER AUTO-UPDATED — may be stale';
+        volatileParts.push(`[CHARACTER PROFILE — ${profileSceneTag}]\n${context.characterProfile}`);
+    }
+    if (context.inventoryActive && context.inventory) {
+        const inventorySceneTag = context.inventoryLastScene && context.inventoryLastScene !== 'Never'
+            ? `Last Updated: Scene #${context.inventoryLastScene}`
+            : 'NEVER AUTO-UPDATED — may be stale';
+        volatileParts.push(`[PLAYER INVENTORY — ${inventorySceneTag}]\n${context.inventory}`);
+    }
     if (context.notebookActive && context.notebook && context.notebook.length > 0) {
         const noteLines = context.notebook
             .sort((a, b) => b.timestamp - a.timestamp)

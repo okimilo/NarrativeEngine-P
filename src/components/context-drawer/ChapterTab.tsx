@@ -13,6 +13,7 @@ export const ChapterTab: React.FC = () => {
         chapters, setChapters, activeCampaignId,
         context, getActiveSummarizerEndpoint,
         timeline, setTimeline, removeTimelineEvent,
+        pinnedChapterIds, pinChapter,
     } = useAppStore();
     
     const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -170,6 +171,11 @@ export const ChapterTab: React.FC = () => {
                     <span className="text-[10px] bg-void-dark px-1.5 py-0.5 rounded border border-border text-text-muted font-mono">
                         {chapters.length}
                     </span>
+                    {pinnedChapterIds.length > 0 && (
+                        <span className="text-[10px] font-bold uppercase text-amber-400 bg-amber-400/10 border border-amber-400/30 px-1.5 py-0.5 rounded font-mono">
+                            {pinnedChapterIds.length} PINNED
+                        </span>
+                    )}
                 </div>
                 <button 
                     onClick={handleNewChapter}
@@ -216,6 +222,8 @@ export const ChapterTab: React.FC = () => {
                                     onMergeWithNext={() => nextChapter && handleMerge(ch.chapterId, nextChapter.chapterId)}
                                     timelineEvents={timeline}
                                     onDeleteTimelineEvent={handleDeleteTimelineEvent}
+                                    isPinned={pinnedChapterIds.includes(ch.chapterId)}
+                                    onTogglePin={() => pinChapter(ch.chapterId)}
                                 />
                             </div>
                         );

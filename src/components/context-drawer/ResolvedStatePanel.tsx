@@ -23,10 +23,20 @@ export const ResolvedStatePanel: React.FC = () => {
     });
     const [isAdding, setIsAdding] = useState(false);
 
-    const resolved = useMemo(
-        () => queryTimeline(timeline, filter ? { subject: filter } : undefined),
-        [timeline, filter]
+    const allResolved = useMemo(
+        () => queryTimeline(timeline, undefined),
+        [timeline]
     );
+
+    const resolved = useMemo(() => {
+        if (!filter.trim()) return allResolved;
+        const f = filter.toLowerCase();
+        return allResolved.filter(e =>
+            e.subject.toLowerCase().includes(f) ||
+            e.object.toLowerCase().includes(f) ||
+            (e.summary ?? '').toLowerCase().includes(f)
+        );
+    }, [allResolved, filter]);
 
     const displayed = collapsed ? resolved.slice(0, 10) : resolved;
 
@@ -166,7 +176,7 @@ export const ResolvedStatePanel: React.FC = () => {
             <div className="px-3 pb-2 space-y-0.5">
                 {/* Filter */}
                 <input
-                    placeholder="Filter by subject…"
+                    placeholder="Filter by subject or object…"
                     value={filter}
                     onChange={e => setFilter(e.target.value)}
                     className="w-full mt-2 bg-void-dark border border-border text-text-primary px-2 py-1 rounded text-[11px] font-mono focus:outline-none focus:border-terminal mb-1.5"

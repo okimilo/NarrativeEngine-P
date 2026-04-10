@@ -146,7 +146,9 @@ export const defaultContext: GameContext = {
     starter: '',
     continuePrompt: '',
     inventory: '',
+    inventoryLastScene: 'Never',
     characterProfile: '',
+    characterProfileLastScene: 'Never',
     surpriseDC: 95,
     encounterDC: 198,
     worldEventDC: 498,
@@ -233,9 +235,18 @@ export type CampaignSlice = {
     removeTimelineEvent: (eventId: string) => void;
     entities: EntityEntry[];
     setEntities: (entities: EntityEntry[]) => void;
+    pinnedChapterIds: string[];
+    pinChapter: (chapterId: string) => void;
+    clearPinnedChapters: () => void;
 
     context: GameContext;
     updateContext: (patch: Partial<GameContext>) => void;
+
+    bookkeepingTurnCounter: number;
+    autoBookkeepingInterval: number;
+    setAutoBookkeepingInterval: (n: number) => void;
+    resetBookkeepingTurnCounter: () => void;
+    incrementBookkeepingTurnCounter: () => number;
 };
 
 // ── Combined state needed for cross-slice access ───────────────────────
@@ -358,6 +369,12 @@ export const createCampaignSlice: StateCreator<CampaignDeps, [], [], CampaignSli
     removeTimelineEvent: (eventId) => set((s) => ({ timeline: s.timeline.filter(e => e.id !== eventId) } as Partial<CampaignDeps>)),
     entities: [],
     setEntities: (entities) => set({ entities } as Partial<CampaignDeps>),
+    pinnedChapterIds: [],
+    pinChapter: (chapterId) => set((s) => {
+        const already = s.pinnedChapterIds.includes(chapterId);
+        return { pinnedChapterIds: already ? s.pinnedChapterIds.filter(id => id !== chapterId) : [...s.pinnedChapterIds, chapterId] } as Partial<CampaignDeps>;
+    }),
+    clearPinnedChapters: () => set({ pinnedChapterIds: [] } as Partial<CampaignDeps>),
 
     context: { ...defaultContext },
     updateContext: (patch) =>
@@ -366,5 +383,15 @@ export const createCampaignSlice: StateCreator<CampaignDeps, [], [], CampaignSli
             debouncedSaveCampaignState();
             return { context: newContext };
         }),
+
+    bookkeepingTurnCounter: 0,
+    autoBookkeepingInterval: 5,
+    setAutoBookkeepingInterval: (n) => set({ autoBookkeepingInterval: Math.max(1, n) } as Partial<CampaignDeps>),
+    resetBookkeepingTurnCounter: () => set({ bookkeepingTurnCounter: 0 } as Partial<CampaignDeps>),
+    incrementBookkeepingTurnCounter: () => {
+        const current = get().bookkeepingTurnCounter + 1;
+        set({ bookkeepingTurnCounter: current } as Partial<CampaignDeps>);
+        return current;
+    },
     }; // end of returned slice object
 }; // end of createCampaignSlice

@@ -88,7 +88,9 @@ export type GameContext = {
     starter: string;
     continuePrompt: string;
     inventory: string;
+    inventoryLastScene: string;
     characterProfile: string;
+    characterProfileLastScene: string;
     surpriseDC?: number;
     encounterDC?: number;
     worldEventDC?: number;
@@ -313,6 +315,9 @@ export type EntityEntry = {
     firstSeen?: string;
     factCount?: number;
 };
+
+/** Soft cap: open chapters auto-seal when they reach this many scenes. */
+export const CHAPTER_SCENE_SOFT_CAP = 25;
 
 export type ArchiveChapter = {
     chapterId: string;            // "CH01"
