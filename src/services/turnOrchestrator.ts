@@ -16,7 +16,6 @@ import { backgroundQueue } from './backgroundQueue';
 import { scanCharacterProfile } from './characterProfileParser';
 import { scanInventory } from './inventoryParser';
 import { toast } from '../components/Toast';
-import { useAppStore } from '../store/useAppStore';
 
 export type TurnCallbacks = {
     onCheckingNotes: (checking: boolean) => void;
@@ -171,7 +170,7 @@ export async function runTurn(
     // ─── Phase 4A: Two-Stage Chapter Funnel Retrieval ───
     const archivePromise = (archiveIndex.length > 0 && activeCampaignId)
         ? (async () => {
-            const chapters = useAppStore.getState().chapters;
+            const chapters = state.chapters;
             const hasSealedChapters = chapters.some(c => c.sealedAt && c.summary);
             
             if (!hasSealedChapters) {
@@ -260,11 +259,10 @@ export async function runTurn(
     ]);
 
     // ─── Pinned Chapter Injection ───────────────────────────────────────
-    const { pinnedChapterIds, clearPinnedChapters, chapters: storeChapters } = useAppStore.getState();
-    if (pinnedChapterIds.length > 0 && activeCampaignId) {
+    if (state.pinnedChapterIds.length > 0 && activeCampaignId) {
         const alreadyCoveredIds = new Set((archiveRecall ?? []).map(s => s.sceneId));
-        for (const pinnedId of pinnedChapterIds) {
-            const pinnedChapter = storeChapters.find(c => c.chapterId === pinnedId);
+        for (const pinnedId of state.pinnedChapterIds) {
+            const pinnedChapter = state.chapters.find(c => c.chapterId === pinnedId);
             if (!pinnedChapter) continue;
             const startNum = parseInt(pinnedChapter.sceneRange[0], 10);
             const endNum = parseInt(pinnedChapter.sceneRange[1], 10);
@@ -281,7 +279,7 @@ export async function runTurn(
                 }
             }
         }
-        clearPinnedChapters();
+        state.clearPinnedChapters();
     }
 
     callbacks.setLoadingStatus?.('Architecting AI Prompt...');
@@ -524,7 +522,7 @@ export async function runTurn(
 
                         // ─── Auto-seal check ──────────────────────────────────────
                         const freshChapters = await api.chapters.list(activeCampaignId);
-                        useAppStore.getState().setChapters(freshChapters);
+                        state.setChapters(freshChapters);
                         const openChapter = freshChapters.find(c => !c.sealedAt);
                         if (openChapter && openChapter.sceneCount >= CHAPTER_SCENE_SOFT_CAP) {
                             console.log(`[Auto-Seal] Chapter "${openChapter.title}" hit ${openChapter.sceneCount} scenes — sealing...`);
@@ -532,7 +530,7 @@ export async function runTurn(
                                 const sealResult = await api.chapters.seal(activeCampaignId!);
                                 if (!sealResult) return;
                                 const sealedChapters = await api.chapters.list(activeCampaignId!);
-                                useAppStore.getState().setChapters(sealedChapters);
+                                state.setChapters(sealedChapters);
                                 toast.info(`Chapter "${sealResult.sealedChapter.title}" auto-sealed (${CHAPTER_SCENE_SOFT_CAP} scenes)`);
 
                                 // Generate summary in background
@@ -545,12 +543,12 @@ export async function runTurn(
                                         String(startNum + i).padStart(3, '0')
                                     );
                                     const chScenes = await api.archive.fetchScenes(activeCampaignId!, sIds);
-                                    const freshCtx = useAppStore.getState().context;
+                                    const freshCtx = state.getFreshContext();
                                     const summaryPatch = await generateChapterSummary(sealProvider, ch, chScenes, freshCtx.headerIndex);
                                     if (summaryPatch) {
                                         await api.chapters.update(activeCampaignId!, ch.chapterId, { ...summaryPatch, invalidated: false });
                                         const latestChapters = await api.chapters.list(activeCampaignId!);
-                                        useAppStore.getState().setChapters(latestChapters);
+                                        state.setChapters(latestChapters);
                                         console.log(`[Auto-Seal] Summary generated for "${ch.title}"`);
                                     }
                                 }
@@ -594,21 +592,19 @@ export async function runTurn(
                     }
 
                     // ── Auto Bookkeeping: Profile & Inventory scan every N turns ──
-                    const store = useAppStore.getState();
-                    const turnCount = store.incrementBookkeepingTurnCounter();
-                    const interval = store.autoBookkeepingInterval;
+                    const turnCount = state.incrementBookkeepingTurnCounter();
+                    const interval = state.autoBookkeepingInterval;
                     if (turnCount >= interval && appendedSceneId) {
                         console.log(`[Auto Bookkeeping] Turn ${turnCount} >= interval ${interval} — queuing profile + inventory scan (scene #${appendedSceneId})`);
-                        store.resetBookkeepingTurnCounter();
+                        state.resetBookkeepingTurnCounter();
 
                         const bkProvider = state.getFreshProvider();
                         if (bkProvider) {
                             const sceneId = appendedSceneId;
 
                             backgroundQueue.push('Profile-Scan', async () => {
-                                const freshStore = useAppStore.getState();
-                                const newProfile = await scanCharacterProfile(bkProvider, freshStore.messages, freshStore.context.characterProfile);
-                                freshStore.updateContext({
+                                const newProfile = await scanCharacterProfile(bkProvider, state.getMessages(), state.getFreshContext().characterProfile);
+                                callbacks.updateContext({
                                     characterProfile: newProfile,
                                     characterProfileLastScene: sceneId,
                                 });
@@ -616,9 +612,8 @@ export async function runTurn(
                             }).catch(err => console.warn('[Auto Bookkeeping] Profile scan failed:', err));
 
                             backgroundQueue.push('Inventory-Scan', async () => {
-                                const freshStore = useAppStore.getState();
-                                const newInventory = await scanInventory(bkProvider, freshStore.messages, freshStore.context.inventory);
-                                freshStore.updateContext({
+                                const newInventory = await scanInventory(bkProvider, state.getMessages(), state.getFreshContext().inventory);
+                                callbacks.updateContext({
                                     inventory: newInventory,
                                     inventoryLastScene: sceneId,
                                 });
