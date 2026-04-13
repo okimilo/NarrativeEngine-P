@@ -91,7 +91,9 @@ export async function runTurn(
             chapters: state.chapters,
             pinnedChapterIds: state.pinnedChapterIds,
             clearPinnedChapters: state.clearPinnedChapters,
-        });
+        }, abortController.signal);
+
+    if (abortController.signal.aborted) return;
 
     callbacks.setLoadingStatus?.('Architecting AI Prompt...');
     const payloadResult = buildPayload(
@@ -124,9 +126,15 @@ export async function runTurn(
     const stripLLMSceneHeader = (text: string): string =>
         text.replace(/^Scene\s*#\d+\s*\|?\s*/i, '');
 
-    const executeTurn = async (currentPayload: any[], toolCallCount = 0, apiRetryCount = 0) => {
-        const assistantMsgId = uid();
-        callbacks.addMessage({ id: assistantMsgId, role: 'assistant' as const, content: '', timestamp: Date.now() });
+    const executeTurn = async (currentPayload: any[], toolCallCount = 0, apiRetryCount = 0, existingMsgId?: string) => {
+        if (abortController.signal.aborted) return;
+
+        const assistantMsgId = existingMsgId ?? uid();
+        if (!existingMsgId) {
+            callbacks.addMessage({ id: assistantMsgId, role: 'assistant' as const, content: '', timestamp: Date.now() });
+        } else {
+            callbacks.updateLastAssistant('');
+        }
         callbacks.setStreaming(true);
 
         const allowTools = toolCallCount < 2 && apiRetryCount < 2;
@@ -145,7 +153,10 @@ export async function runTurn(
                 if (toolCall && toolCall.name === 'query_campaign_lore') {
                     callbacks.onCheckingNotes(true);
                     callbacks.setStreaming(false);
-                    callbacks.updateLastAssistant(finalText);
+                    const loreEngineText = sceneNumber
+                        ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(finalText)}`
+                        : finalText;
+                    callbacks.updateLastAssistant(loreEngineText);
 
                     callbacks.updateLastMessage({
                         tool_calls: [{
@@ -157,7 +168,7 @@ export async function runTurn(
 
                     currentPayload.push({
                         role: 'assistant',
-                        content: finalText || "",
+                        content: loreEngineText || "",
                         tool_calls: [{ id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: toolCall.arguments } }]
                     } as unknown as import('./chatEngine').OpenAIMessage);
 
@@ -189,7 +200,10 @@ export async function runTurn(
                 }
 
                 if (toolCall && toolCall.name === 'update_scene_notebook') {
-                    callbacks.updateLastAssistant(finalText);
+                    const nbEngineText = sceneNumber
+                        ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(finalText)}`
+                        : finalText;
+                    callbacks.updateLastAssistant(nbEngineText);
 
                     callbacks.updateLastMessage({
                         tool_calls: [{
@@ -201,7 +215,7 @@ export async function runTurn(
 
                     currentPayload.push({
                         role: 'assistant',
-                        content: finalText || "",
+                        content: nbEngineText || "",
                         tool_calls: [{ id: toolCall.id, type: 'function', function: { name: toolCall.name, arguments: toolCall.arguments } }]
                     } as unknown as import('./chatEngine').OpenAIMessage);
 
@@ -240,10 +254,13 @@ export async function runTurn(
                 callbacks.updateLastAssistant(engineText);
                 
                 const allMsgs = state.getMessages();
-                const lastAssistant = allMsgs[allMsgs.length - 1];
+                const userIdx = allMsgs.findIndex(m => m.id === userMsgId);
+                const turnAssistants = allMsgs.slice(userIdx + 1)
+                    .filter(m => m.role === 'assistant' && m.content);
+                const combinedContent = turnAssistants.map(m => m.content).join('\n\n');
 
-                if (lastAssistant?.role === 'assistant' && lastAssistant.content && activeCampaignId) {
-                    await runPostTurnPipeline(state, callbacks, lastAssistant.content, allMsgs);
+                if (combinedContent && activeCampaignId) {
+                    await runPostTurnPipeline(state, callbacks, combinedContent, allMsgs);
                 }
             },
             (err) => {
@@ -256,11 +273,11 @@ export async function runTurn(
                 if (apiRetryCount === 0) {
                     callbacks.updateLastAssistant(`⚠️ Error: ${err}. Retrying...`);
                     toast.warning('LLM request failed — retrying...');
-                    setTimeout(() => executeTurn(currentPayload, toolCallCount, 1), 2000);
+                    setTimeout(() => executeTurn(currentPayload, toolCallCount, 1, assistantMsgId), 2000);
                 } else if (apiRetryCount === 1) {
                     callbacks.updateLastAssistant(`⚠️ Error: ${err}. Retrying without tools...`);
                     toast.warning('Retry failed — trying without tools...');
-                    setTimeout(() => executeTurn(currentPayload, 999, 2), 4000); // doubled backoff
+                    setTimeout(() => executeTurn(currentPayload, 999, 2, assistantMsgId), 4000); // doubled backoff
                 } else {
                     callbacks.updateLastAssistant(`⚠️ Error: ${err}`);
                     toast.error('LLM request failed after retries');

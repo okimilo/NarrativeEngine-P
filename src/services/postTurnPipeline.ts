@@ -1,5 +1,6 @@
 import type { ChatMessage } from '../types';
 import type { TurnState, TurnCallbacks } from './turnOrchestrator';
+import { useAppStore } from '../store/useAppStore';
 import { api } from './apiClient';
 import { CHAPTER_SCENE_SOFT_CAP } from '../types';
 import { rateImportance } from './importanceRater';
@@ -98,13 +99,33 @@ export async function runPostTurnPipeline(
         if (validatedNames.length > 0) {
             const { newNames, existingNpcs: existingNpcsToUpdate } = classifyNPCNames(validatedNames, npcLedger);
 
+            // Guard: capture campaign ID at enqueue time so in-flight tasks that
+            // complete after a campaign switch are silently dropped, not misfiled.
+            const guardedAddNPC = (npc: Parameters<typeof callbacks.addNPC>[0]) => {
+                const currentId = useAppStore.getState().activeCampaignId;
+                if (currentId !== activeCampaignId) {
+                    console.warn(`[NPC Auto-Gen] Dropping NPC "${npc.name}" — campaign switched (${activeCampaignId} → ${currentId})`);
+                    return;
+                }
+                callbacks.addNPC(npc);
+            };
+
+            const guardedUpdateNPC = (id: string, patch: Parameters<typeof callbacks.updateNPC>[1]) => {
+                const currentId = useAppStore.getState().activeCampaignId;
+                if (currentId !== activeCampaignId) {
+                    console.warn(`[NPC Update] Dropping update for NPC ${id} — campaign switched (${activeCampaignId} → ${currentId})`);
+                    return;
+                }
+                callbacks.updateNPC(id, patch);
+            };
+
             for (const potentialName of newNames) {
                 console.log(`[NPC Auto-Gen] New character detected: "${potentialName}" — queuing background profile generation...`);
                 const genProvider = state.getFreshProvider();
                 if (genProvider) {
                     backgroundQueue.push(
                         `NPC-Gen:${potentialName}`,
-                        () => generateNPCProfile(genProvider, allMsgs, potentialName, callbacks.addNPC)
+                        () => generateNPCProfile(genProvider, allMsgs, potentialName, guardedAddNPC)
                     ).catch(err => console.warn(`[NPC Auto-Gen] Background generation failed for "${potentialName}":`, err));
                 }
             }
@@ -114,7 +135,7 @@ export async function runPostTurnPipeline(
                 if (updateProvider) {
                     backgroundQueue.push(
                         `NPC-Update:${existingNpcsToUpdate.map(n => n.name).join(',')}`,
-                        () => updateExistingNPCs(updateProvider, allMsgs, existingNpcsToUpdate, callbacks.updateNPC)
+                        () => updateExistingNPCs(updateProvider, allMsgs, existingNpcsToUpdate, guardedUpdateNPC)
                     ).catch(err => console.warn('[NPC Update] Background update failed:', err));
                 }
             }

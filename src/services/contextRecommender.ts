@@ -83,7 +83,8 @@ export async function recommendContext(
     npcLedger: NPCEntry[],
     loreChunks: LoreChunk[],
     messages: ChatMessage[],
-    userMessage: string
+    userMessage: string,
+    signal?: AbortSignal
 ): Promise<RecommenderResult> {
     const npcRoster = buildNPCRoster(npcLedger);
     const loreIndex = buildLoreIndex(loreChunks);
@@ -117,6 +118,7 @@ Respond with the JSON object now:`;
             stream: false,
             temperature: 0.1, // Low temperature for consistent structured output
         }),
+        signal,
     });
 
     if (!res.ok) {

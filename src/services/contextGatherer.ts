@@ -25,7 +25,8 @@ type GatherDeps = {
 export async function gatherContext(
     state: TurnState,
     finalInput: string,
-    deps: GatherDeps
+    deps: GatherDeps,
+    signal?: AbortSignal
 ): Promise<GatheredContext> {
     const { input, messages, loreChunks, npcLedger, archiveIndex, activeCampaignId, context } = state;
 
@@ -45,11 +46,13 @@ export async function gatherContext(
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ query: input }),
+                        signal,
                     }),
                     fetch(`${API}/campaigns/${activeCampaignId}/lore/semantic-candidates`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ query: input }),
+                        signal,
                     }),
                 ]);
                 if (archiveRes.ok) {
@@ -67,7 +70,7 @@ export async function gatherContext(
         : Promise.resolve();
 
     const timelinePromise = activeCampaignId
-        ? fetch(`${API}/campaigns/${activeCampaignId}/archive/next-scene`)
+        ? fetch(`${API}/campaigns/${activeCampaignId}/archive/next-scene`, { signal })
             .then(async res => {
                 if (res.ok) {
                     const snData = await res.json();
@@ -147,7 +150,8 @@ export async function gatherContext(
         npcLedger,
         loreChunks,
         messages,
-        finalInput
+        finalInput,
+        signal
     ).then(result => {
         recommendedNPCNames = result.relevantNPCNames;
         console.log(`[ContextGatherer] Recommender returned: ${recommendedNPCNames.length} NPCs, ${result.relevantLoreIds.length} lore`);

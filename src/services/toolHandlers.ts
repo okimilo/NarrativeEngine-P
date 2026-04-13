@@ -100,7 +100,7 @@ export function handleNotebookTool(
     let notebookActions: { op: string; text?: string }[] = [];
     try { notebookActions = JSON.parse(toolArguments).actions || []; } catch { /* Ignore */ }
 
-    const currentNotebook = [...ctx.notebook];
+    const currentNotebook = [...(ctx.notebook ?? [])];
     let opsCount = 0;
 
     for (const action of notebookActions) {

@@ -48,6 +48,16 @@ class BackgroundQueue {
         }
     }
 
+    clear(reason = 'Campaign switched') {
+        const dropped = this.queue.splice(0, this.queue.length);
+        if (dropped.length > 0) {
+            console.log(`[BG Queue] Cleared ${dropped.length} pending task(s): ${reason}`);
+            for (const task of dropped) {
+                task.reject(new Error(`[BG Queue] Task "${task.label}" cancelled: ${reason}`));
+            }
+        }
+    }
+
     get pending() { return this.queue.length; }
     get active() { return this.running; }
 }

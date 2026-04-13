@@ -2,7 +2,7 @@ import { DATA_DIR } from './fileStore.js';
 import path from 'path';
 import fs from 'fs';
 
-const MODEL_ID = 'Xenova/mxbai-embed-large-v1';
+const MODEL_ID = 'mixedbread-ai/mxbai-embed-large-v1';
 const CACHE_DIR = path.join(DATA_DIR, '.embeddings_cache');
 const ACTIVE_DIMS = 1024;
 const ACTIVE_PROVIDER = 'local-mxbai';
@@ -23,8 +23,8 @@ async function loadModel() {
 
     const { pipeline } = await import('@huggingface/transformers');
     extractor = await pipeline('feature-extraction', MODEL_ID, {
-        dtype: 'fp32',
-        model_cache_dir: CACHE_DIR,
+        dtype: 'q8',
+        cache_dir: CACHE_DIR,
     });
 
     console.log(`[Embedder] Model loaded: ${MODEL_ID} (${ACTIVE_DIMS} dims, CPU)`);

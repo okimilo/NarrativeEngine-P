@@ -9,6 +9,7 @@ import {
 } from '../store/campaignStore';
 import { API_BASE as API } from '../lib/apiBase';
 import { DEFAULT_CONTEXT, DEFAULT_CONDENSER } from '../services/campaignInit';
+import { backgroundQueue } from '../services/backgroundQueue';
 import type { Campaign } from '../types';
 import { useCampaignForm } from './hooks/useCampaignForm';
 import { CampaignFormModal } from './CampaignFormModal';
@@ -53,6 +54,7 @@ export function CampaignHub() {
     };
 
     const handleSelectCampaign = async (campaign: Campaign) => {
+        backgroundQueue.clear('Campaign switch to ' + campaign.id);
         const updatedCampaign = { ...campaign, lastPlayedAt: Date.now() };
         await saveCampaign(updatedCampaign);
         const [state, chunks, npcs, archiveIndex, timeline, entities] = await Promise.all([

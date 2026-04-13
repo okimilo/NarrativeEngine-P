@@ -52,9 +52,14 @@ export function createChaptersRouter() {
 
         if (idx === -1) return res.status(404).json({ error: 'Chapter not found' });
 
-        // Only allow editing title for now
-        if (req.body.title !== undefined) {
-            existing[idx].title = req.body.title;
+        const allowed = [
+            'title', 'summary', 'keywords', 'npcs',
+            'majorEvents', 'unresolvedThreads', 'tone', 'themes', 'invalidated'
+        ];
+        for (const key of allowed) {
+            if (req.body[key] !== undefined) {
+                existing[idx][key] = req.body[key];
+            }
         }
 
         writeJson(cp, existing);
