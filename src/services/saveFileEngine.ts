@@ -263,19 +263,21 @@ function truncateScenesToBudget(
     scenes: { sceneId: string; content: string }[],
     budget: number = CHAPTER_SUMMARY_TOKEN_BUDGET
 ): { sceneId: string; content: string }[] {
-    const totalTokens = scenes.reduce((sum, s) => sum + countTokens(s.content), 0);
-    if (totalTokens <= budget) return scenes;
+    // First pass: cap any single scene that exceeds the entire budget on its own
+    const perSceneCap = Math.max(Math.floor(budget / Math.max(scenes.length, 1)), 500);
+    let working = scenes.map(s => {
+        if (countTokens(s.content) <= perSceneCap) return s;
+        // ~4 chars per token approximation for the slice
+        return { sceneId: s.sceneId, content: s.content.slice(0, perSceneCap * 4) + '\n[...truncated]' };
+    });
 
-    // Strategy: keep ~20% oldest + ~60% newest, drop middle oldest scenes
-    const keepCount = Math.floor(scenes.length * 0.8);
-    const dropCount = scenes.length - keepCount;
-    const dropFromStart = Math.floor(dropCount * 0.25); // Keep some oldest context
-    const dropFromEnd = dropCount - dropFromStart;
+    // Second pass: drop middle scenes until total fits the budget
+    while (working.length > 1 && working.reduce((sum, s) => sum + countTokens(s.content), 0) > budget) {
+        const mid = Math.floor(working.length / 2);
+        working = [...working.slice(0, mid), ...working.slice(mid + 1)];
+    }
 
-    return [
-        ...scenes.slice(0, scenes.length - dropFromEnd - dropFromStart),
-        ...scenes.slice(scenes.length - dropFromEnd),
-    ];
+    return working;
 }
 
 function buildChapterSummaryPrompt(

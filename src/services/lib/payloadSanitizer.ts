@@ -25,10 +25,17 @@ export const sanitizePayloadForApi = (rawPayload: any[], allowTools: boolean): a
                 continue;
             }
 
-            const validCalls = msg.tool_calls.filter((tc: any) =>
-                tc && tc.type === 'function' && typeof tc.id === 'string' &&
-                tc.function && typeof tc.function.name === 'string'
-            );
+            const validCalls = msg.tool_calls.filter((tc: any) => {
+                if (!tc || tc.type !== 'function' || typeof tc.id !== 'string') return false;
+                if (!tc.function || typeof tc.function.name !== 'string') return false;
+                if (typeof tc.function.arguments === 'string' && tc.function.arguments.trim()) {
+                    try { JSON.parse(tc.function.arguments); } catch {
+                        console.warn('[Payload] Dropping tool_call with invalid JSON arguments:', tc.function.name, tc.id);
+                        return false;
+                    }
+                }
+                return true;
+            });
 
             if (validCalls.length === 0) {
                 console.warn('[Payload] All tool_calls invalid for assistant message, stripping', msg.tool_calls?.length, 'calls');
@@ -59,5 +66,19 @@ export const sanitizePayloadForApi = (rawPayload: any[], allowTools: boolean): a
         cleaned.push(msg);
     }
 
-    return cleaned;
+    const resolvedCallIds = new Set(
+        cleaned.filter(m => m.role === 'tool' && typeof m.tool_call_id === 'string')
+               .map(m => m.tool_call_id as string)
+    );
+    return cleaned.map(msg => {
+        if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+            const resolved = msg.tool_calls.filter((tc: any) => resolvedCallIds.has(tc.id));
+            if (resolved.length !== msg.tool_calls.length) {
+                console.warn('[Payload] Stripping unresolved tool_calls from assistant message to prevent 400');
+                const { tool_calls, ...rest } = msg;
+                return resolved.length > 0 ? { ...rest, tool_calls: resolved } : rest;
+            }
+        }
+        return msg;
+    });
 };

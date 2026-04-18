@@ -69,9 +69,11 @@ export const createChatSlice: StateCreator<ChatDeps, [], [], ChatSlice> = (set) 
     updateLastAssistant: (content) =>
         set((s) => {
             const msgs = [...s.messages];
-            const lastIdx = msgs.length - 1;
-            if (lastIdx >= 0 && msgs[lastIdx].role === 'assistant') {
-                msgs[lastIdx] = { ...msgs[lastIdx], content };
+            for (let i = msgs.length - 1; i >= 0; i--) {
+                if (msgs[i].role === 'assistant') {
+                    msgs[i] = { ...msgs[i], content };
+                    return { messages: msgs };
+                }
             }
             return { messages: msgs };
         }),

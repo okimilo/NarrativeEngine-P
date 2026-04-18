@@ -133,15 +133,19 @@ export async function runTurn(
     const stripLLMSceneHeader = (text: string): string =>
         text.replace(/^Scene\s*#\d+\s*\|?\s*/i, '');
 
+    let accumulatedContent = '';
+
     const executeTurn = async (currentPayload: any[], toolCallCount = 0, apiRetryCount = 0, existingMsgId?: string) => {
         if (abortController.signal.aborted) return;
 
         const assistantMsgId = existingMsgId ?? uid();
         if (!existingMsgId) {
             callbacks.addMessage({ id: assistantMsgId, role: 'assistant' as const, content: '', timestamp: Date.now() });
-        } else {
+        } else if (apiRetryCount > 0) {
+            // Error retry: clear any error message shown in the bubble
             callbacks.updateLastAssistant('');
         }
+        // Tool-call recursion (existingMsgId + apiRetryCount === 0): preserve existing content
         callbacks.setStreaming(true);
 
         const allowTools = toolCallCount < 2 && apiRetryCount < 2;
@@ -154,17 +158,20 @@ export async function runTurn(
         await sendMessage(
             provider,
             requestPayload,
-            (fullText) => callbacks.updateLastAssistant(
-                sceneNumber ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(fullText)}` : fullText
-            ),
+            (fullText) => {
+                const newText = sceneNumber ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(fullText)}` : fullText;
+                callbacks.updateLastAssistant(
+                    accumulatedContent ? `${accumulatedContent}\n\n${stripLLMSceneHeader(fullText)}` : newText
+                );
+            },
             async (finalText, toolCall) => {
                 if (toolCall && toolCall.name === 'query_campaign_lore') {
                     callbacks.setPipelinePhase?.('checking-notes');
                     callbacks.onCheckingNotes(true);
-                    callbacks.setStreaming(false);
                     const loreEngineText = sceneNumber
                         ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(finalText)}`
                         : finalText;
+                    accumulatedContent = loreEngineText;
                     callbacks.updateLastAssistant(loreEngineText);
 
                     callbacks.updateLastMessage({
@@ -213,6 +220,7 @@ export async function runTurn(
                     const nbEngineText = sceneNumber
                         ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(finalText)}`
                         : finalText;
+                    accumulatedContent = nbEngineText;
                     callbacks.updateLastAssistant(nbEngineText);
 
                     callbacks.updateLastMessage({
@@ -259,16 +267,24 @@ export async function runTurn(
                 callbacks.setStreaming(false);
                 callbacks.onCheckingNotes(false);
                 callbacks.setPipelinePhase?.('post-processing');
-                const engineText = sceneNumber
+                const baseText = sceneNumber
                     ? `Scene #${sceneNumber} | ${stripLLMSceneHeader(finalText)}`
                     : finalText;
+                const engineText = accumulatedContent
+                    ? `${accumulatedContent}\n\n${stripLLMSceneHeader(finalText)}`
+                    : baseText;
                 callbacks.updateLastAssistant(engineText);
                 
                 const allMsgs = state.getMessages();
                 const userIdx = allMsgs.findIndex(m => m.id === userMsgId);
-                const turnAssistants = allMsgs.slice(userIdx + 1)
-                    .filter(m => m.role === 'assistant' && m.content);
-                const combinedContent = turnAssistants.map(m => m.content).join('\n\n');
+                // Guard: if userMsgId not found (state reset / condenser ran during generation),
+                // slice(0) would return ALL messages — fall back to engineText only.
+                const combinedContent = userIdx === -1
+                    ? engineText
+                    : allMsgs.slice(userIdx + 1)
+                        .filter(m => m.role === 'assistant' && m.content)
+                        .map(m => m.content)
+                        .join('\n\n');
 
                 if (combinedContent && activeCampaignId) {
                     await runPostTurnPipeline(state, callbacks, combinedContent, allMsgs);
