@@ -55,5 +55,18 @@ Upgrade/
 PLAN-*.md
 GLM-CODE-REVIEW-HANDOFF.md
 
-# Graphify output
+# Graphify output and tooling
 graphify-out/
+.graphify_python
+.graphifyignore
+scripts/patch-graph-imports.mjs
+
+# Vite/React scaffold defaults
+public/vite.svg
+src/assets/react.svg
+
+# Planning / design docs (not app code)
+auto-condenser.md
+
+# One-time migration scripts
+server/scripts/migrateEmbeddings.js
