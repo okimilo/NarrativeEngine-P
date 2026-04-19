@@ -184,4 +184,4 @@ Works great with Ollama for fully local play — no internet required after setu
 
 ## License
 
-This project is currently unlicensed. All rights reserved.
+This project is licensed under the [MIT License](LICENSE) — Copyright (c) 2026 Sagesheep.
