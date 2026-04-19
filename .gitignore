@@ -28,6 +28,23 @@ build-output
 *.sw?
 .claude/
 
+# Runtime-generated portraits
+public/assets/portraits/*.png
+public/assets/portraits/portraits/
+
+# Debug / temp scripts
+debug_api.js
+debug_campaigns.cjs
+compare.py
+
+# Build artifacts
+server.bundle.cjs
+
+# Debug dumps
+scene310_*.txt
+scene310_*.md
+stabs.json
+
 # Repomix / codebase export files
 repomix-output.xml
 repomix-output.md
