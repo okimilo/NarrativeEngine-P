@@ -1,6 +1,6 @@
 import type { EndpointConfig, ProviderConfig, SamplingConfig } from '../types';
 import { uid } from '../utils/uid';
-import { llmQueue } from './llmRequestQueue';
+import { getQueueForEndpoint } from './llmRequestQueue';
 import { getChatUrl, getModelsUrl, buildChatHeaders, buildChatBody, getApiFormat, extractStreamDelta, extractStreamToolCall } from '../utils/llmApiHelper';
 
 export type OpenAIMessage = {
@@ -38,7 +38,8 @@ export async function sendMessage(
             fetchUrl = `${fetchUrl}${sep}key=${provider.apiKey}`;
         }
 
-        await llmQueue.acquireSlot('normal');
+        const queue = getQueueForEndpoint(provider.endpoint);
+        await queue.acquireSlot('normal');
         try {
             const res = await fetch(fetchUrl, {
                 method: 'POST',
@@ -49,7 +50,7 @@ export async function sendMessage(
 
             if (!res.ok) {
                 const errBody = await res.text();
-                if (res.status === 429) llmQueue.onRateLimitHit();
+                if (res.status === 429 || res.status === 503 || res.status === 529) queue.onRateLimitHit();
                 onError(`API error ${res.status}: ${errBody}`);
                 return;
             }
@@ -184,7 +185,7 @@ export async function sendMessage(
                 onDone(fullText);
             }
         } finally {
-            llmQueue.releaseSlot();
+            queue.releaseSlot();
             clearTimeout(timeoutId);
         }
     } catch (err) {

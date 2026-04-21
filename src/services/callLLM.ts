@@ -8,7 +8,7 @@
 //   'low'    — all post-turn background tasks (inventory, profile, importance, save)
 
 import type { ProviderConfig, EndpointConfig } from '../types';
-import { llmQueue, type LLMCallPriority } from './llmRequestQueue';
+import { getQueueForEndpoint, type LLMCallPriority } from './llmRequestQueue';
 import { getChatUrl, buildChatHeaders, buildChatBody, extractContent } from '../utils/llmApiHelper';
 
 const MAX_RETRIES = 3;
@@ -35,10 +35,11 @@ export async function callLLM(
     });
 
     const priority = options?.priority ?? 'normal';
+    const queue = getQueueForEndpoint(provider.endpoint);
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         // Wait for a slot (respects stagger + concurrency cap + priority order)
-        await llmQueue.acquireSlot(priority);
+        await queue.acquireSlot(priority);
 
         let res: Response;
         try {
@@ -50,12 +51,13 @@ export async function callLLM(
             });
         } catch (e) {
             // Network error / abort — free the slot and propagate
-            llmQueue.releaseSlot();
+            queue.releaseSlot();
             throw e;
         }
 
-        if (res.status !== 429) {
-            llmQueue.releaseSlot();
+        const retryable = res.status === 429 || res.status === 503 || res.status === 529;
+        if (!retryable) {
+            queue.releaseSlot();
             if (!res.ok) {
                 const errBody = await res.text();
                 throw new Error(`LLM API error ${res.status}: ${errBody}`);
@@ -64,16 +66,16 @@ export async function callLLM(
             return extractContent(data, provider);
         }
 
-        // ── 429 handling ──────────────────────────────────────────────────────
+        // ── 429 / 529 handling ────────────────────────────────────────────────
         // Tell the queue we hit the API's concurrency ceiling, then release so
         // other in-flight calls can continue.  Re-queue this request after a
         // short wait; acquireSlot() will block until a completion frees a slot.
-        llmQueue.onRateLimitHit();
-        llmQueue.releaseSlot();
+        queue.onRateLimitHit();
+        queue.releaseSlot();
 
         if (attempt === MAX_RETRIES) {
             const errBody = await res.text();
-            throw new Error(`LLM API error 429 (retries exhausted): ${errBody}`);
+            throw new Error(`LLM API error ${res.status} (retries exhausted): ${errBody}`);
         }
 
         const retryAfter = res.headers.get('Retry-After');
@@ -82,7 +84,7 @@ export async function callLLM(
             : DEFAULT_RETRY_DELAY_MS;
 
         console.warn(
-            `[LLMQueue] 429 (attempt ${attempt + 1}/${MAX_RETRIES + 1}, priority=${priority}). ` +
+            `[LLMQueue] ${res.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1}, priority=${priority}). ` +
             `Waiting ${delay}ms then re-queuing for next open slot...`
         );
         await new Promise(resolve => setTimeout(resolve, delay));
